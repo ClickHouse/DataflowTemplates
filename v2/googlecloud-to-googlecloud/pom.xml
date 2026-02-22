@@ -29,8 +29,7 @@
   <artifactId>googlecloud-to-googlecloud</artifactId>
 
   <properties>
-    <dataplex.api.version>v1-rev20230308-2.0.0</dataplex.api.version>
-    <dlp.version>2.1.0</dlp.version>
+    <dataplex.api.version>v1-rev20251113-2.0.0</dataplex.api.version>
   </properties>
 
   <build>
@@ -132,7 +131,7 @@
     <dependency>
       <groupId>com.google.cloud</groupId>
       <artifactId>google-cloud-spanner</artifactId>
-      <version>6.89.0</version>
+      <version>6.104.0</version>
       <type>test-jar</type>
       <scope>test</scope>
     </dependency>
@@ -240,6 +239,12 @@
     <dependency>
       <groupId>org.mockito</groupId>
       <artifactId>mockito-core</artifactId>
+      <version>${mockito.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.mockito</groupId>
+      <artifactId>mockito-inline</artifactId>
       <version>${mockito.version}</version>
       <scope>test</scope>
     </dependency>

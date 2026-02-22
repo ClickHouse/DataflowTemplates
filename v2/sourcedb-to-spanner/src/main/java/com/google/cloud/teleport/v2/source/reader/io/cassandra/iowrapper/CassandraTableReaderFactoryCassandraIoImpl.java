@@ -18,6 +18,8 @@ package com.google.cloud.teleport.v2.source.reader.io.cassandra.iowrapper;
 import com.datastax.driver.core.ConsistencyLevel;
 import com.datastax.oss.driver.api.core.config.DriverExecutionProfile;
 import com.datastax.oss.driver.api.core.config.TypedDriverOption;
+import com.google.cloud.teleport.v2.source.reader.io.cassandra.rowmapper.AstraDbSourceRowMapper;
+import com.google.cloud.teleport.v2.source.reader.io.cassandra.rowmapper.AstraDbSourceRowMapperFactoryFn;
 import com.google.cloud.teleport.v2.source.reader.io.cassandra.rowmapper.CassandraSourceRowMapper;
 import com.google.cloud.teleport.v2.source.reader.io.cassandra.rowmapper.CassandraSourceRowMapperFactoryFn;
 import com.google.cloud.teleport.v2.source.reader.io.row.SourceRow;
@@ -26,6 +28,7 @@ import com.google.cloud.teleport.v2.source.reader.io.schema.SourceTableSchema;
 import com.google.common.annotations.VisibleForTesting;
 import java.util.stream.Collectors;
 import org.apache.beam.sdk.coders.SerializableCoder;
+import org.apache.beam.sdk.io.astra.db.AstraDbIO;
 import org.apache.beam.sdk.io.localcassandra.CassandraIO;
 import org.apache.beam.sdk.io.localcassandra.CassandraIO.Read;
 import org.apache.beam.sdk.transforms.PTransform;
@@ -66,20 +69,54 @@ public class CassandraTableReaderFactoryCassandraIoImpl implements CassandraTabl
       CassandraDataSource cassandraDataSource,
       SourceSchemaReference sourceSchemaReference,
       SourceTableSchema sourceTableSchema) {
+    return switch (cassandraDataSource.getDialect()) {
+      case OSS -> getTableReaderOss(
+          cassandraDataSource.oss(), sourceSchemaReference, sourceTableSchema);
+      case ASTRA -> getTableReaderAstra(
+          cassandraDataSource.astra(), sourceSchemaReference, sourceTableSchema);
+    };
+  }
+
+  private PTransform<PBegin, PCollection<SourceRow>> getTableReaderAstra(
+      AstraDbDataSource astraDbDataSource,
+      SourceSchemaReference sourceSchemaReference,
+      SourceTableSchema sourceTableSchema) {
+    AstraDbSourceRowMapper astraDbSourceRowMapper =
+        AstraDbSourceRowMapper.builder()
+            .setSourceSchemaReference(sourceSchemaReference)
+            .setSourceTableSchema(sourceTableSchema)
+            .build();
+    AstraDbIO.Read<SourceRow> astraSource =
+        AstraDbIO.<SourceRow>read()
+            .withToken(astraDbDataSource.astraToken())
+            .withSecureConnectBundle(astraDbDataSource.secureConnectBundle())
+            .withKeyspace(astraDbDataSource.keySpace())
+            .withTable(delimitIdentifier(sourceTableSchema.tableName()))
+            // .withMinNumberOfSplits(minimalTokenRangesCount)
+            .withMapperFactoryFn(AstraDbSourceRowMapperFactoryFn.create(astraDbSourceRowMapper))
+            .withCoder(SerializableCoder.of(SourceRow.class))
+            .withEntity(SourceRow.class);
+    return setNumPartitionsAstra(astraSource, astraDbDataSource, sourceTableSchema.tableName());
+  }
+
+  private PTransform<PBegin, PCollection<SourceRow>> getTableReaderOss(
+      CassandraDataSourceOss cassandraDataSourceOss,
+      SourceSchemaReference sourceSchemaReference,
+      SourceTableSchema sourceTableSchema) {
     CassandraSourceRowMapper cassandraSourceRowMapper =
         getSourceRowMapper(sourceSchemaReference, sourceTableSchema);
     DriverExecutionProfile profile =
-        cassandraDataSource.driverConfigLoader().getInitialConfig().getDefaultProfile();
+        cassandraDataSourceOss.driverConfigLoader().getInitialConfig().getDefaultProfile();
     final Read<SourceRow> tableReader =
         CassandraIO.<SourceRow>read()
-            .withTable(sourceTableSchema.tableName())
+            .withTable(delimitIdentifier(sourceTableSchema.tableName()))
             .withHosts(
-                cassandraDataSource.contactPoints().stream()
+                cassandraDataSourceOss.contactPoints().stream()
                     .map(p -> p.getHostString())
                     .collect(Collectors.toList()))
-            .withPort(cassandraDataSource.contactPoints().get(0).getPort())
-            .withKeyspace(cassandraDataSource.loggedKeySpace())
-            .withLocalDc(cassandraDataSource.localDataCenter())
+            .withPort(cassandraDataSourceOss.contactPoints().get(0).getPort())
+            .withKeyspace(cassandraDataSourceOss.loggedKeySpace())
+            .withLocalDc(cassandraDataSourceOss.localDataCenter())
             .withConsistencyLevel(
                 profile.getString(TypedDriverOption.REQUEST_CONSISTENCY.getRawOption()))
             .withConnectTimeout(getConnectionTimeout(profile))
@@ -88,13 +125,80 @@ public class CassandraTableReaderFactoryCassandraIoImpl implements CassandraTabl
             .withCoder(SerializableCoder.of(SourceRow.class))
             .withMapperFactoryFn(
                 CassandraSourceRowMapperFactoryFn.create(cassandraSourceRowMapper));
-    return setNumPartitions(
-        setCredentials(tableReader, profile), cassandraDataSource, sourceTableSchema.tableName());
+    return setSslOptions(
+        setNumPartitionsOss(
+            setCredentials(tableReader, profile),
+            cassandraDataSourceOss,
+            sourceTableSchema.tableName()),
+        profile);
   }
 
   @VisibleForTesting
-  protected static CassandraIO.Read<SourceRow> setNumPartitions(
-      CassandraIO.Read<SourceRow> tableReader, CassandraDataSource dataSource, String tableName) {
+  protected static CassandraIO.Read<SourceRow> setSslOptions(
+      CassandraIO.Read<SourceRow> tableReader, DriverExecutionProfile profile) {
+    if (enableSSL(profile)) {
+      SerializableSSLOptionsFactory.Builder sslOptionsFactoryBuilder =
+          SerializableSSLOptionsFactory.builder();
+      if (profile.isDefined(TypedDriverOption.SSL_TRUSTSTORE_PATH.getRawOption())) {
+        sslOptionsFactoryBuilder.setTrustStorePath(
+            profile.getString(TypedDriverOption.SSL_TRUSTSTORE_PATH.getRawOption()));
+      }
+      if (profile.isDefined(TypedDriverOption.SSL_TRUSTSTORE_PASSWORD.getRawOption())) {
+        sslOptionsFactoryBuilder.setTrustStorePassword(
+            profile.getString(TypedDriverOption.SSL_TRUSTSTORE_PASSWORD.getRawOption()));
+      }
+      if (profile.isDefined(TypedDriverOption.SSL_KEYSTORE_PATH.getRawOption())) {
+        sslOptionsFactoryBuilder.setKeyStorePath(
+            profile.getString(TypedDriverOption.SSL_KEYSTORE_PATH.getRawOption()));
+      }
+      if (profile.isDefined(TypedDriverOption.SSL_KEYSTORE_PASSWORD.getRawOption())) {
+        sslOptionsFactoryBuilder.setKeyStorePassword(
+            profile.getString(TypedDriverOption.SSL_KEYSTORE_PASSWORD.getRawOption()));
+      }
+      if (profile.isDefined(TypedDriverOption.SSL_CIPHER_SUITES.getRawOption())) {
+        sslOptionsFactoryBuilder.setSslCipherSuites(
+            profile.getStringList(TypedDriverOption.SSL_CIPHER_SUITES.getRawOption()));
+      }
+      SSLOptionsProvider sslOptionsProvider =
+          SSLOptionsProvider.buidler()
+              .setSslOptionsFactory(sslOptionsFactoryBuilder.build())
+              .build();
+      return tableReader.withSsl(sslOptionsProvider);
+    }
+    return tableReader;
+  }
+
+  @VisibleForTesting
+  protected static boolean enableSSL(DriverExecutionProfile profile) {
+    return (profile.isDefined(TypedDriverOption.SSL_TRUSTSTORE_PATH.getRawOption())
+        || profile.isDefined(TypedDriverOption.SSL_KEYSTORE_PATH.getRawOption()));
+  }
+
+  @VisibleForTesting
+  protected static CassandraIO.Read<SourceRow> setNumPartitionsOss(
+      CassandraIO.Read<SourceRow> tableReader,
+      CassandraDataSourceOss dataSource,
+      String tableName) {
+    Integer numPartitions = dataSource.numPartitions();
+    if (numPartitions != null && numPartitions > 0) {
+      LOG.info(
+          "Setting numPartitions as {} for DataSource {}, tableName {}",
+          numPartitions,
+          dataSource,
+          tableName);
+      return tableReader.withMinNumberOfSplits(numPartitions);
+    } else {
+      LOG.info(
+          "numPartitions would be auto Inferred to number of hosts, for DataSource {}, tableName {}",
+          dataSource,
+          tableName);
+      return tableReader;
+    }
+  }
+
+  @VisibleForTesting
+  protected static AstraDbIO.Read<SourceRow> setNumPartitionsAstra(
+      AstraDbIO.Read<SourceRow> tableReader, AstraDbDataSource dataSource, String tableName) {
     Integer numPartitions = dataSource.numPartitions();
     if (numPartitions != null && numPartitions > 0) {
       LOG.info(
@@ -159,6 +263,19 @@ public class CassandraTableReaderFactoryCassandraIoImpl implements CassandraTabl
               profile.getString(TypedDriverOption.AUTH_PROVIDER_PASSWORD.getRawOption()));
     }
     return tableReader;
+  }
+
+  /**
+   * Delimit the Identifiers as per <a
+   * href=https://github.com/ronsavage/SQL/blob/master/sql-99.bnf>sql-99</a>. This is needed to
+   * handle cases where the user might use reserved keywords as column or table names.
+   *
+   * @param identifier
+   * @return
+   */
+  @VisibleForTesting
+  protected static String delimitIdentifier(String identifier) {
+    return "\"" + identifier.replaceAll("\"", "\"\"") + "\"";
   }
 
   private CassandraSourceRowMapper getSourceRowMapper(

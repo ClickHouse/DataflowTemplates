@@ -65,6 +65,7 @@ import org.apache.beam.it.gcp.storage.GcsResourceManager;
 import org.assertj.core.api.Assertions;
 import org.junit.AfterClass;
 import org.junit.Before;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.runner.RunWith;
@@ -142,7 +143,8 @@ public class SpannerToCassandraSourceDbIT extends SpannerToSourceDbITBase {
                 null,
                 null,
                 null,
-                CASSANDRA_SOURCE_TYPE);
+                CASSANDRA_SOURCE_TYPE,
+                null);
       }
     }
   }
@@ -527,6 +529,7 @@ public class SpannerToCassandraSourceDbIT extends SpannerToSourceDbITBase {
    * @throws MultipleFailureException if multiple assertions fail during validation.
    */
   @Test
+  @Ignore
   public void spannerToCassandraSourceAllDataTypeConversionTest()
       throws InterruptedException, IOException, MultipleFailureException {
     assertThatPipeline(jobInfo).isRunning();

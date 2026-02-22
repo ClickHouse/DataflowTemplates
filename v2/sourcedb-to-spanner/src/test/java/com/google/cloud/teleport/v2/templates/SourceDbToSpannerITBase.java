@@ -17,6 +17,7 @@ package com.google.cloud.teleport.v2.templates;
 
 import static org.apache.beam.it.truthmatchers.PipelineAsserts.assertThatPipeline;
 
+import com.google.cloud.spanner.Dialect;
 import com.google.cloud.teleport.v2.source.reader.io.jdbc.iowrapper.config.SQLDialect;
 import com.google.cloud.teleport.v2.spanner.migrations.transformation.CustomTransformation;
 import com.google.common.io.Resources;
@@ -48,6 +49,7 @@ import org.apache.beam.it.jdbc.PostgresResourceManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.testcontainers.shaded.com.google.common.collect.ImmutableList;
+import org.testcontainers.shaded.org.apache.commons.lang3.RandomStringUtils;
 
 /**
  * Base class for SourceDbToSpanner integration tests. It provides helper functions related to
@@ -55,10 +57,6 @@ import org.testcontainers.shaded.com.google.common.collect.ImmutableList;
  */
 public class SourceDbToSpannerITBase extends JDBCBaseIT {
   private static final Logger LOG = LoggerFactory.getLogger(SourceDbToSpannerITBase.class);
-  protected static final String VPC_NAME = "spanner-wide-row-pr-test-vpc";
-  protected static final String VPC_REGION = "us-central1";
-  protected static final String SUBNET_NAME = "regions/" + VPC_REGION + "/subnetworks/" + VPC_NAME;
-  protected static final Map<String, String> ADDITIONAL_JOB_PARAMS = new HashMap<>();
 
   public MySQLResourceManager setUpMySQLResourceManager() {
     return MySQLResourceManager.builder(testName).build();
@@ -78,13 +76,22 @@ public class SourceDbToSpannerITBase extends JDBCBaseIT {
     /* Max Cassandra Keyspace is 48 characters. Base Resource Manager adds 24 characters of date-time at the end.
      * That's why we need to take a smaller subsequence of the testId.
      */
-    String uniqueId = testId.substring(0, Math.min(20, testId.length()));
+    String uniqueId =
+        testId.substring(0, Math.min(15, testId.length()))
+            + "_"
+            + RandomStringUtils.randomAlphabetic(4).toLowerCase();
 
     return CassandraResourceManager.builder(uniqueId).build();
   }
 
   public SpannerResourceManager setUpSpannerResourceManager() {
     return SpannerResourceManager.builder(testName, PROJECT, REGION)
+        .maybeUseStaticInstance()
+        .build();
+  }
+
+  public SpannerResourceManager setUpPGDialectSpannerResourceManager() {
+    return SpannerResourceManager.builder(testName, PROJECT, REGION, Dialect.POSTGRESQL)
         .maybeUseStaticInstance()
         .build();
   }
@@ -205,7 +212,6 @@ public class SourceDbToSpannerITBase extends JDBCBaseIT {
    * @param gcsPathPrefix Prefix directory name for this DF job. Data and DLQ directories will be
    *     created under this prefix.
    * @return dataflow jobInfo object
-   * @throws IOException
    */
   protected PipelineLauncher.LaunchInfo launchDataflowJob(
       String identifierSuffix,
@@ -223,15 +229,17 @@ public class SourceDbToSpannerITBase extends JDBCBaseIT {
             put("projectId", PROJECT);
             put("instanceId", spannerResourceManager.getInstanceId());
             put("databaseId", spannerResourceManager.getDatabaseId());
-            put("outputDirectory", "gs://" + artifactBucketName);
+            put("workerMachineType", "n2-standard-4");
           }
         };
-    params.putAll(ADDITIONAL_JOB_PARAMS);
     if (sourceResourceManager instanceof JDBCResourceManager) {
       params.putAll(getJdbcParameters((JDBCResourceManager) sourceResourceManager));
     } else if (sourceResourceManager instanceof CassandraResourceManager) {
       params.putAll(
           getCassandraParameters((CassandraResourceManager) sourceResourceManager, gcsPathPrefix));
+    }
+    if (!params.containsKey("outputDirectory")) {
+      params.put("outputDirectory", "gs://" + artifactBucketName);
     }
 
     if (sessionFileResourceName != null) {
@@ -263,13 +271,10 @@ public class SourceDbToSpannerITBase extends JDBCBaseIT {
 
     options.setParameters(params);
     options.addEnvironment("additionalExperiments", List.of("disable_runner_v2"));
-    if (System.getProperty("numWorkers") != null) {
-      options.addEnvironment("numWorkers", Integer.parseInt(System.getProperty("numWorkers")));
-    } else {
-      options.addEnvironment("numWorkers", 2);
-    }
+    options.addEnvironment("numWorkers", 2);
+    options.addEnvironment("ipConfiguration", "WORKER_IP_PRIVATE");
     // Run
-    PipelineLauncher.LaunchInfo jobInfo = launchTemplate(options, false);
+    PipelineLauncher.LaunchInfo jobInfo = launchTemplate(options);
     assertThatPipeline(jobInfo).isRunning();
 
     return jobInfo;
@@ -303,13 +308,13 @@ public class SourceDbToSpannerITBase extends JDBCBaseIT {
     String configFile =
         String.format(
             """
-                datastax-java-driver {
-                      basic.contact-points = ["%s:%d"]
-                      basic.session-keyspace = %s
-                      basic.load-balancing-policy {
-                        local-datacenter = datacenter1
-                      }
-                    }""",
+                            datastax-java-driver {
+                                  basic.contact-points = ["%s:%d"]
+                                  basic.session-keyspace = %s
+                                  basic.load-balancing-policy {
+                                    local-datacenter = datacenter1
+                                  }
+                                }""",
             cassandraResourceManager.getHost(),
             cassandraResourceManager.getPort(),
             cassandraResourceManager.getKeyspaceName());
@@ -327,9 +332,19 @@ public class SourceDbToSpannerITBase extends JDBCBaseIT {
                 ? gcsPathPrefix.substring(0, gcsPathPrefix.length() - 1)
                 : gcsPathPrefix;
     String fileNamePrefix = testId.substring(0, Math.min(20, testId.length()));
-    configBasePath = configBasePath + "/cassandra/" + fileNamePrefix + "-config.conf";
+    configBasePath = configBasePath + "cassandra/" + fileNamePrefix + "-config.conf";
     String configGcsPath = getGcsPath(configBasePath);
     String configPath = configGcsPath.replace("gs://" + artifactBucketName + "/", "");
+    String outputBasePath =
+        (gcsPathPrefix == null)
+            ? ""
+            : gcsPathPrefix.endsWith("/")
+                ? gcsPathPrefix.substring(0, gcsPathPrefix.length() - 1)
+                : gcsPathPrefix;
+    outputBasePath =
+        outputBasePath + "cassandra/" + testId.substring(0, Math.min(20, testId.length())) + "/";
+    String outputPath = getGcsPath(outputBasePath);
+    LOG.info("OutputPath = {}", outputPath);
 
     gcsClient.copyFileToGcs(tempFile.toAbsolutePath(), configPath);
     LOG.info(
@@ -340,6 +355,7 @@ public class SourceDbToSpannerITBase extends JDBCBaseIT {
         configFile);
     Files.delete(tempFile);
     params.put("sourceConfigURL", configGcsPath);
+    params.put("outputDirectory", outputPath);
     return params;
   }
 

@@ -21,6 +21,7 @@ import com.google.cloud.spanner.SpannerOptions;
 import com.google.cloud.spanner.spi.v1.SpannerInterceptorProvider;
 import com.google.cloud.teleport.v2.failureinjection.ErrorInjectionPolicy;
 import com.google.cloud.teleport.v2.failureinjection.ErrorInjectionPolicyFactory;
+import com.google.cloud.teleport.v2.failureinjection.TransactionTimeoutInjectionPolicy;
 import io.grpc.CallOptions;
 import io.grpc.Channel;
 import io.grpc.ClientCall;
@@ -30,6 +31,7 @@ import io.grpc.ForwardingClientCallListener.SimpleForwardingClientCallListener;
 import io.grpc.Metadata;
 import io.grpc.MethodDescriptor;
 import io.grpc.Status;
+import io.grpc.Status.Code;
 import java.io.Serializable;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
@@ -51,8 +53,14 @@ public class SpannerService implements ServiceFactory<Spanner, SpannerOptions>, 
     }
 
     boolean isCloudSpannerDataAPI(String fullMethodName) {
+      // For TransactionTimeoutInjectionPolicy, we only want to inject errors into Commit calls.
+      if (errorInjectionPolicy instanceof TransactionTimeoutInjectionPolicy) {
+        return fullMethodName.startsWith("google.spanner.v1.Spanner/Commit");
+      }
+
       if (fullMethodName.startsWith("google.spanner.v1.Spanner/BatchCreateSessions")
-          || fullMethodName.startsWith("google.spanner.v1.Spanner/CreateSession")) {
+          || fullMethodName.startsWith("google.spanner.v1.Spanner/CreateSession")
+          || fullMethodName.startsWith("google.spanner.v1.Spanner/CloseSession")) {
         // filter out create session calls.
         return false;
       }
@@ -91,7 +99,18 @@ public class SpannerService implements ServiceFactory<Spanner, SpannerOptions>, 
                 public void onClose(Status status, Metadata metadata) {
                   if (errorInjected.get()) {
                     // Return an error as if it has been sent from Spanner.
-                    status = Status.DEADLINE_EXCEEDED.augmentDescription("INJECTED BY TEST");
+                    if (errorInjectionPolicy.getErrorCodeToBeInjected() != null) {
+                      try {
+                        status =
+                            Status.fromCode(
+                                    Code.valueOf(errorInjectionPolicy.getErrorCodeToBeInjected()))
+                                .augmentDescription("INJECTED BY TEST");
+                      } catch (IllegalArgumentException e) {
+                        status = Status.DEADLINE_EXCEEDED.augmentDescription("INJECTED BY TEST");
+                      }
+                    } else {
+                      status = Status.DEADLINE_EXCEEDED.augmentDescription("INJECTED BY TEST");
+                    }
                   }
                   super.onClose(status, metadata);
                 }

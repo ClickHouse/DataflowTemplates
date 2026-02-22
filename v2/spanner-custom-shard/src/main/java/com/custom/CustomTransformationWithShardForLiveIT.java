@@ -132,10 +132,12 @@ public class CustomTransformationWithShardForLiveIT implements ISpannerMigration
       // filtered row.
       Long tinyIntColumn = Long.parseLong((String) requestRow.get("tinyint_column")) + 1;
       Long intColumn = Long.parseLong((String) requestRow.get("int_column")) + 1;
+      Long sourceOnlyPk = intColumn - tinyIntColumn;
       Long bigIntColumn = Long.parseLong((String) requestRow.get("bigint_column")) + 1;
       Long yearColumn = Long.parseLong((String) requestRow.get("year_column")) + 1;
       BigDecimal floatColumn = (BigDecimal) requestRow.get("float_column");
       BigDecimal doubleColumn = (BigDecimal) requestRow.get("double_column");
+      responseRow.put("source_only_pk", sourceOnlyPk.toString());
       responseRow.put("tinyint_column", tinyIntColumn.toString());
       responseRow.put("text_column", "\'" + requestRow.get("text_column") + " append\'");
       responseRow.put("int_column", intColumn.toString());
@@ -230,6 +232,12 @@ public class CustomTransformationWithShardForLiveIT implements ISpannerMigration
           new MigrationTransformationResponse(responseRow, false);
       return response;
     }
+    return new MigrationTransformationResponse(null, false);
+  }
+
+  @Override
+  public MigrationTransformationResponse transformFailedSpannerMutation(
+      MigrationTransformationRequest request) throws InvalidTransformationException {
     return new MigrationTransformationResponse(null, false);
   }
 }

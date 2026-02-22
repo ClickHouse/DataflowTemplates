@@ -38,6 +38,7 @@ import com.google.cloud.teleport.v2.spanner.migrations.schema.SchemaStringOverri
 import com.google.cloud.teleport.v2.spanner.migrations.shard.ShardingContext;
 import com.google.cloud.teleport.v2.spanner.migrations.transformation.CustomTransformation;
 import com.google.cloud.teleport.v2.spanner.migrations.transformation.TransformationContext;
+import com.google.cloud.teleport.v2.spanner.migrations.utils.DataflowWorkerMachineTypeValidator;
 import com.google.cloud.teleport.v2.spanner.migrations.utils.SessionFileReader;
 import com.google.cloud.teleport.v2.spanner.migrations.utils.ShardingContextReader;
 import com.google.cloud.teleport.v2.spanner.migrations.utils.TransformationContextReader;
@@ -487,7 +488,7 @@ public class DataStreamToSpanner {
         optional = true,
         helpText =
             "Sharding context file path in cloud storage is used to populate the shard id in spanner database for each source shard."
-                + "It is of the format Map<stream_name, Map<db_name, shard_id>>",
+                + "It expects a JSON file with the format: {\\\"StreamToDbAndShardMap\\\": Map<stream_name, Map<db_name, shard_id>>}",
         description = "Sharding context file path in cloud storage")
     String getShardingContextFilePath();
 
@@ -607,17 +608,15 @@ public class DataStreamToSpanner {
       LOG.error("IOException Occurred: DataStreamClient failed initialization.");
       throw new IllegalArgumentException("Unable to initialize DatastreamClient: " + e);
     }
-    // TODO: use getPostgresSourceConfig() instead of an else once SourceConfig.java is updated.
     if (sourceConfig.getMysqlSourceConfig() != null) {
       return DatastreamConstants.MYSQL_SOURCE_TYPE;
     } else if (sourceConfig.getOracleSourceConfig() != null) {
       return DatastreamConstants.ORACLE_SOURCE_TYPE;
-    } else {
+    } else if (sourceConfig.getPostgresqlSourceConfig() != null) {
       return DatastreamConstants.POSTGRES_SOURCE_TYPE;
     }
-    // LOG.error("Source Connection Profile Type Not Supported");
-    // throw new IllegalArgumentException("Unsupported source connection profile type in
-    // Datastream");
+    LOG.error("Source Connection Profile Type Not Supported");
+    throw new IllegalArgumentException("Unsupported source connection profile type in Datastream");
   }
 
   /**
@@ -648,6 +647,9 @@ public class DataStreamToSpanner {
      *   3) Write Failures to GCS Dead Letter Queue
      */
     Pipeline pipeline = Pipeline.create(options);
+    String workerMachineType =
+        pipeline.getOptions().as(DataflowPipelineWorkerPoolOptions.class).getWorkerMachineType();
+    DataflowWorkerMachineTypeValidator.validateMachineSpecs(workerMachineType, 4);
     DeadLetterQueueManager dlqManager = buildDlqManager(options);
     // Ingest session file into schema object.
     Schema schema = SessionFileReader.read(options.getSessionFilePath());
@@ -742,7 +744,8 @@ public class DataStreamToSpanner {
                   .withFileReadConcurrency(options.getFileReadConcurrency())
                   .withoutDatastreamRecordsReshuffle()
                   .withDirectoryWatchDuration(
-                      Duration.standardMinutes(options.getDirectoryWatchDurationInMinutes())));
+                      Duration.standardMinutes(options.getDirectoryWatchDurationInMinutes()))
+                  .withDatastreamSourceType(options.getDatastreamSourceType()));
       int maxNumWorkers = options.getMaxNumWorkers() != 0 ? options.getMaxNumWorkers() : 1;
       jsonRecords =
           PCollectionList.of(datastreamJsonRecords)
@@ -828,6 +831,10 @@ public class DataStreamToSpanner {
     spannerConfig =
         SpannerServiceFactoryImpl.createSpannerService(
             spannerConfig, options.getFailureInjectionParameter());
+    shadowTableSpannerConfig =
+        SpannerServiceFactoryImpl.createSpannerService(
+            shadowTableSpannerConfig, options.getFailureInjectionParameter());
+
     /*
      * Stage 4: Write transformed records to Cloud Spanner
      */
@@ -952,14 +959,14 @@ public class DataStreamToSpanner {
     LOG.info("Dead-letter queue directory: {}", dlqDirectory);
     options.setDeadLetterQueueDirectory(dlqDirectory);
     if ("regular".equals(options.getRunMode())) {
-      return DeadLetterQueueManager.create(dlqDirectory, options.getDlqMaxRetryCount());
+      return DeadLetterQueueManager.create(dlqDirectory, options.getDlqMaxRetryCount(), true);
     } else {
       String retryDlqUri =
           FileSystems.matchNewResource(dlqDirectory, true)
               .resolve("severe", StandardResolveOptions.RESOLVE_DIRECTORY)
               .toString();
       LOG.info("Dead-letter retry directory: {}", retryDlqUri);
-      return DeadLetterQueueManager.create(dlqDirectory, retryDlqUri, 0);
+      return DeadLetterQueueManager.create(dlqDirectory, retryDlqUri, 0, true);
     }
   }
 

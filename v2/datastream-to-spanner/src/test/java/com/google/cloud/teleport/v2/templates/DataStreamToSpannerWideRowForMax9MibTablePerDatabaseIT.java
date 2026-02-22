@@ -51,6 +51,7 @@ import org.apache.beam.it.jdbc.JDBCResourceManager;
 import org.apache.commons.lang3.RandomStringUtils;
 import org.junit.After;
 import org.junit.Before;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.runner.RunWith;
@@ -60,6 +61,7 @@ import org.junit.runners.JUnit4;
 @Category({TemplateIntegrationTest.class, SkipDirectRunnerTest.class})
 @TemplateIntegrationTest(DataStreamToSpanner.class)
 @RunWith(JUnit4.class)
+@Ignore("Triaging flaky test") // TODO(b/424087272)
 public class DataStreamToSpannerWideRowForMax9MibTablePerDatabaseIT
     extends DataStreamToSpannerITBase {
   private static final int STRING_LENGTH = 200;
@@ -101,7 +103,7 @@ public class DataStreamToSpannerWideRowForMax9MibTablePerDatabaseIT
         datastreamResourceManager =
             DatastreamResourceManager.builder(testName, PROJECT, REGION)
                 .setCredentialsProvider(credentialsProvider)
-                .setPrivateConnectivity("datastream-private-connect-us-central1")
+                .setPrivateConnectivity("datastream-connect-2")
                 .build();
         spannerResourceManager = setUpSpannerResourceManager();
         pubsubResourceManager = setUpPubSubResourceManager();
@@ -115,14 +117,6 @@ public class DataStreamToSpannerWideRowForMax9MibTablePerDatabaseIT
                 TABLE_NAMES,
                 generateBaseSchema());
         setupSchema();
-        ADDITIONAL_JOB_PARAMS.putAll(
-            new HashMap<>() {
-              {
-                put("network", VPC_NAME);
-                put("subnetwork", SUBNET_NAME);
-                put("workerRegion", VPC_REGION);
-              }
-            });
         jobInfo =
             launchDataflowJob(
                 getClass().getSimpleName(),

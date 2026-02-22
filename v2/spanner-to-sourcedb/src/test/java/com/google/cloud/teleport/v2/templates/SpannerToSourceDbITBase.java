@@ -18,6 +18,7 @@ package com.google.cloud.teleport.v2.templates;
 import static com.google.cloud.teleport.v2.spanner.migrations.constants.Constants.MYSQL_SOURCE_TYPE;
 import static org.apache.beam.it.truthmatchers.PipelineAsserts.assertThatPipeline;
 
+import com.google.cloud.spanner.Dialect;
 import com.google.cloud.teleport.v2.spanner.migrations.shard.Shard;
 import com.google.cloud.teleport.v2.spanner.migrations.transformation.CustomTransformation;
 import com.google.common.io.Resources;
@@ -26,17 +27,16 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.pubsub.v1.SubscriptionName;
 import com.google.pubsub.v1.TopicName;
-import java.io.BufferedReader;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.stream.Collectors;
 import org.apache.beam.it.cassandra.CassandraResourceManager;
 import org.apache.beam.it.common.PipelineLauncher;
 import org.apache.beam.it.common.utils.IORedirectUtil;
@@ -54,41 +54,39 @@ import org.slf4j.LoggerFactory;
 public abstract class SpannerToSourceDbITBase extends TemplateTestBase {
 
   private static final Logger LOG = LoggerFactory.getLogger(SpannerToSourceDbITBase.class);
-  protected static final String VPC_NAME = "spanner-wide-row-pr-test-vpc";
-  protected static final String VPC_REGION = "us-central1";
-  protected static final String SUBNET_NAME = "regions/" + VPC_REGION + "/subnetworks/" + VPC_NAME;
-  protected static final Map<String, String> ADDITIONAL_JOB_PARAMS = new HashMap<>();
 
-  protected SpannerResourceManager createSpannerDatabase(String spannerSchemaFile)
-      throws IOException {
-    SpannerResourceManager spannerResourceManager =
-        SpannerResourceManager.builder("rr-main-" + testName, PROJECT, REGION)
-            .maybeUseStaticInstance()
-            .build();
+  protected SpannerResourceManager setUpSpannerResourceManager() {
+    return SpannerResourceManager.builder("rr-main-" + testName, PROJECT, REGION)
+        .maybeUseStaticInstance()
+        .build();
+  }
 
-    String ddl;
-    try (InputStream inputStream =
-        Thread.currentThread().getContextClassLoader().getResourceAsStream(spannerSchemaFile)) {
-      if (inputStream == null) {
-        throw new FileNotFoundException("Resource file not found: " + spannerSchemaFile);
-      }
-      try (BufferedReader reader =
-          new BufferedReader(new InputStreamReader(inputStream, StandardCharsets.UTF_8))) {
-        ddl = reader.lines().collect(Collectors.joining("\n"));
-      }
-    }
+  protected SpannerResourceManager setUpPGDialectSpannerResourceManager() {
+    return SpannerResourceManager.builder(
+            "rr-main-" + testName, PROJECT, REGION, Dialect.POSTGRESQL)
+        .maybeUseStaticInstance()
+        .build();
+  }
 
+  protected void createSpannerDDL(
+      SpannerResourceManager spannerResourceManager, String spannerSchemaFile) throws IOException {
+    String ddl =
+        String.join(
+            "\n",
+            Resources.readLines(Resources.getResource(spannerSchemaFile), StandardCharsets.UTF_8));
     if (ddl.isBlank()) {
       throw new IllegalStateException("DDL file is empty: " + spannerSchemaFile);
     }
+    ddl = ddl.trim();
+    List<String> ddls = Arrays.stream(ddl.split(";")).toList();
+    spannerResourceManager.executeDdlStatements(ddls);
+  }
 
-    String[] ddls = ddl.trim().split(";");
-    for (String d : ddls) {
-      d = d.trim();
-      if (!d.isEmpty()) {
-        spannerResourceManager.executeDdlStatement(d);
-      }
-    }
+  protected SpannerResourceManager createSpannerDatabase(String spannerSchemaFile)
+      throws IOException {
+
+    SpannerResourceManager spannerResourceManager = setUpSpannerResourceManager();
+    createSpannerDDL(spannerResourceManager, spannerSchemaFile);
     return spannerResourceManager;
   }
 
@@ -99,6 +97,15 @@ public abstract class SpannerToSourceDbITBase extends TemplateTestBase {
             .build();
     String dummy = "CREATE TABLE IF NOT EXISTS t1(id INT64 ) primary key(id)";
     spannerMetadataResourceManager.executeDdlStatement(dummy);
+    return spannerMetadataResourceManager;
+  }
+
+  protected SpannerResourceManager createPGDialectSpannerMetadataDatabase() {
+    SpannerResourceManager spannerMetadataResourceManager =
+        SpannerResourceManager.builder("rr-meta-" + testName, PROJECT, REGION, Dialect.POSTGRESQL)
+            .maybeUseStaticInstance()
+            .build();
+    spannerMetadataResourceManager.ensureUsableAndCreateResources();
     return spannerMetadataResourceManager;
   }
 
@@ -208,13 +215,13 @@ public abstract class SpannerToSourceDbITBase extends TemplateTestBase {
       String shardingCustomClassName,
       String sourceDbTimezoneOffset,
       CustomTransformation customTransformation,
-      String sourceType)
+      String sourceType,
+      Map<String, String> jobParameters)
       throws IOException {
 
     Map<String, String> params =
         new HashMap<>() {
           {
-            put("sessionFilePath", getGcsPath("input/session.json", gcsResourceManager));
             put("instanceId", spannerResourceManager.getInstanceId());
             put("databaseId", spannerResourceManager.getDatabaseId());
             put("spannerProjectId", PROJECT);
@@ -234,11 +241,12 @@ public abstract class SpannerToSourceDbITBase extends TemplateTestBase {
             put("maxNumWorkers", "1");
             put("numWorkers", "1");
             put("sourceType", sourceType);
+            put("workerMachineType", "n2-standard-4");
           }
         };
-
-    params.putAll(ADDITIONAL_JOB_PARAMS);
-
+    if (jobParameters != null) {
+      params.putAll(jobParameters);
+    }
     if (shardingCustomJarPath != null) {
       params.put(
           "shardingCustomJarPath",
@@ -265,8 +273,9 @@ public abstract class SpannerToSourceDbITBase extends TemplateTestBase {
         PipelineLauncher.LaunchConfig.builder(jobName, specPath);
     options.setParameters(params);
     options.addEnvironment("additionalExperiments", Collections.singletonList("use_runner_v2"));
+    options.addEnvironment("ipConfiguration", "WORKER_IP_PRIVATE");
     // Run
-    PipelineLauncher.LaunchInfo jobInfo = launchTemplate(options, false);
+    PipelineLauncher.LaunchInfo jobInfo = launchTemplate(options);
     assertThatPipeline(jobInfo).isRunning();
     return jobInfo;
   }
@@ -358,7 +367,7 @@ public abstract class SpannerToSourceDbITBase extends TemplateTestBase {
     }
 
     String ddlStream =
-        "CREATE CHANGE STREAM allstream FOR ALL OPTIONS (value_capture_type = 'NEW_ROW', retention_period = '7d')";
+        "CREATE CHANGE STREAM allstream FOR ALL OPTIONS (value_capture_type = 'NEW_ROW', retention_period = '7d', allow_txn_exclusion = true)";
     try {
       spannerResourceManager.executeDdlStatement(ddlStream);
     } catch (Exception e) {

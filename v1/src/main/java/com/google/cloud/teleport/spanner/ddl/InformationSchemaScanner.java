@@ -28,6 +28,8 @@ import com.google.cloud.spanner.ReadContext;
 import com.google.cloud.spanner.ResultSet;
 import com.google.cloud.spanner.Statement;
 import com.google.cloud.teleport.spanner.ddl.ForeignKey.ReferentialAction;
+import com.google.cloud.teleport.spanner.ddl.PropertyGraph.GraphDynamicLabelExpression;
+import com.google.cloud.teleport.spanner.ddl.PropertyGraph.GraphDynamicPropertiesExpression;
 import com.google.cloud.teleport.spanner.ddl.Table.InterleaveType;
 import com.google.cloud.teleport.spanner.proto.ExportProtos.Export;
 import com.google.common.annotations.VisibleForTesting;
@@ -389,11 +391,12 @@ public class InformationSchemaScanner {
           resultSet.isNull(13) ? null : Long.valueOf(resultSet.getString(13));
       Long identitySkipRangeMax =
           resultSet.isNull(14) ? null : Long.valueOf(resultSet.getString(14));
+      String onUpdateExpression = resultSet.isNull(15) ? null : resultSet.getString(15);
       boolean isHidden =
           dialect == Dialect.GOOGLE_STANDARD_SQL
-              ? resultSet.getBoolean(15)
-              : resultSet.getString(15).equalsIgnoreCase("YES");
-      boolean isPlacementKey = resultSet.getBoolean(16);
+              ? resultSet.getBoolean(16)
+              : resultSet.getString(16).equalsIgnoreCase("YES");
+      boolean isPlacementKey = resultSet.getBoolean(17);
 
       builder
           .createTable(tableName)
@@ -405,6 +408,7 @@ public class InformationSchemaScanner {
           .generationExpression(generationExpression)
           .isStored(isStored)
           .defaultExpression(defaultExpression)
+          .onUpdateExpression(onUpdateExpression)
           .isIdentityColumn(isIdentity)
           .sequenceKind(sequenceKind)
           .counterStartValue(identityStartWithCounter)
@@ -432,7 +436,8 @@ public class InformationSchemaScanner {
                 + " c.ordinal_position, c.spanner_type, c.is_nullable,"
                 + " c.is_generated, c.generation_expression, c.is_stored,"
                 + " c.column_default, c.is_identity, c.identity_kind, c.identity_start_with_counter,"
-                + " c.identity_skip_range_min, c.identity_skip_range_max, c.is_hidden,"
+                + " c.identity_skip_range_min, c.identity_skip_range_max,"
+                + " c.on_update_expression, c.is_hidden,"
                 + " pkc.constraint_name IS NOT NULL AS is_placement_key"
                 + " FROM information_schema.columns as c"
                 + " LEFT JOIN placementkeycolumns AS pkc"
@@ -448,7 +453,8 @@ public class InformationSchemaScanner {
                 + " c.ordinal_position, c.spanner_type, c.is_nullable,"
                 + " c.is_generated, c.generation_expression, c.is_stored, c.column_default,"
                 + " c.is_identity, c.identity_kind, c.identity_start_with_counter, "
-                + " c.identity_skip_range_min, c.identity_skip_range_max, c.is_hidden,"
+                + " c.identity_skip_range_min, c.identity_skip_range_max,"
+                + " c.on_update_expression, c.is_hidden,"
                 + " pkc.constraint_name IS NOT NULL AS is_placement_key"
                 + " FROM information_schema.columns as c"
                 + " LEFT JOIN placementkeycolumns AS pkc"
@@ -538,7 +544,7 @@ public class InformationSchemaScanner {
                 + " FROM information_schema.indexes AS t "
                 + " WHERE t.table_schema NOT IN "
                 + " ('information_schema', 'spanner_sys', 'pg_catalog')"
-                + " AND (t.index_type='INDEX' OR t.index_type='SEARCH') AND t.spanner_is_managed = 'NO' "
+                + " AND (t.index_type='INDEX' OR t.index_type='SEARCH' OR t.index_type='ScaNN') AND t.spanner_is_managed = 'NO' "
                 + " ORDER BY t.table_name, t.index_name");
       default:
         throw new IllegalArgumentException("Unrecognized dialect: " + dialect);
@@ -572,7 +578,8 @@ public class InformationSchemaScanner {
         if (indexType != null && ordering != null) {
           // Non-tokenlist columns should not be included in the key for Search Indexes.
           if ((indexType.equals("SEARCH") && !spannerType.contains(tokenlistType))
-              || (indexType.equals("VECTOR") && !spannerType.startsWith("ARRAY"))) {
+              || (indexType.equals("VECTOR") && !spannerType.startsWith("ARRAY"))
+              || (indexType.equals("ScaNN") && !spannerType.contains("vector length"))) {
             continue;
           }
         }
@@ -593,7 +600,9 @@ public class InformationSchemaScanner {
             indexBuilder.columns().create().name(columnName);
         // Tokenlist columns do not have ordering.
         if (spannerType != null
-            && (spannerType.equals(tokenlistType) || spannerType.startsWith("ARRAY"))) {
+            && (spannerType.equals(tokenlistType)
+                || spannerType.startsWith("ARRAY")
+                || spannerType.contains("vector length"))) {
           indexColumnsBuilder.none();
         } else if (ordering == null) {
           indexColumnsBuilder.storing();
@@ -661,7 +670,10 @@ public class InformationSchemaScanner {
           allOptions.computeIfAbsent(kv, k -> ImmutableList.builder());
 
       if (optionType.equalsIgnoreCase("STRING")) {
-        options.add(optionName + "=\"" + OPTION_STRING_ESCAPER.escape(optionValue) + "\"");
+        String quoteChar =
+            dialect == Dialect.POSTGRESQL ? POSTGRESQL_LITERAL_QUOTE : GSQL_LITERAL_QUOTE;
+        options.add(
+            optionName + "=" + quoteChar + OPTION_STRING_ESCAPER.escape(optionValue) + quoteChar);
       } else if (optionType.equalsIgnoreCase("character varying")) {
         options.add(optionName + "='" + OPTION_STRING_ESCAPER.escape(optionValue) + "'");
       } else {
@@ -1084,9 +1096,11 @@ public class InformationSchemaScanner {
       case GOOGLE_STANDARD_SQL:
         return Statement.of(
             "SELECT p.specific_schema, p.specific_name, p.parameter_name, p.data_type,"
-                + " p.parameter_default  FROM information_schema.parameters AS p WHERE"
-                + " p.specific_schema NOT IN ('INFORMATION_SCHEMA', 'SPANNER_SYS') ORDER BY"
-                + " p.specific_schema, p.specific_name, p.ordinal_position");
+                + " p.parameter_default  FROM information_schema.parameters AS p, information_schema.routines AS r"
+                + " WHERE p.specific_schema NOT IN ('INFORMATION_SCHEMA', 'SPANNER_SYS') and p.specific_name ="
+                + " r.specific_name and r.routine_type = 'FUNCTION' and r.routine_body = 'SQL' ORDER BY p.specific_schema,"
+                + " p.specific_name, p.ordinal_position");
+
       default:
         throw new IllegalArgumentException("Unrecognized dialect: " + dialect);
     }
@@ -1293,6 +1307,18 @@ public class InformationSchemaScanner {
                   .baseTableName(baseTableName)
                   .kind(GraphElementTable.Kind.valueOf(kind))
                   .keyColumns(keyColumns);
+
+          // If dynamic label or property expressions exist, capture them.
+          if (table.has("dynamicLabelExpr")) {
+            PropertyGraph.GraphDynamicLabelExpression dynamicLabelExpr =
+                new GraphDynamicLabelExpression(table.getString("dynamicLabelExpr"));
+            graphElementTableBuilder.dynamicLabelExpression(dynamicLabelExpr);
+          }
+          if (table.has("dynamicPropertyExpr")) {
+            PropertyGraph.GraphDynamicPropertiesExpression dynamicPropertiesExpr =
+                new GraphDynamicPropertiesExpression(table.getString("dynamicPropertyExpr"));
+            graphElementTableBuilder.dynamicPropertiesExpression(dynamicPropertiesExpr);
+          }
 
           // If it's an edge table, extract source and destination node table references
           if (tableType.equals("edgeTables")) {

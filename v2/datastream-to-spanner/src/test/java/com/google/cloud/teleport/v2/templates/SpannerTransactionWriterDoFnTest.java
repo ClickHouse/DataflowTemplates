@@ -51,6 +51,7 @@ import org.apache.beam.sdk.io.gcp.spanner.SpannerConfig;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
 import org.apache.beam.sdk.options.ValueProvider;
 import org.apache.beam.sdk.transforms.DoFn;
+import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollectionView;
 import org.junit.Test;
 import org.mockito.ArgumentCaptor;
@@ -149,7 +150,7 @@ public class SpannerTransactionWriterDoFnTest {
         FailsafeElement.of(outputObject.toString(), outputObject.toString());
     Ddl ddl = getTestDdl();
 
-    when(processContextMock.element()).thenReturn(failsafeElement);
+    when(processContextMock.element()).thenReturn(KV.of(1L, failsafeElement));
     when(processContextMock.sideInput(any())).thenReturn(ddl);
     when(processContextMock.getPipelineOptions()).thenReturn(options);
     when(schema.isEmpty()).thenReturn(true);
@@ -166,7 +167,8 @@ public class SpannerTransactionWriterDoFnTest {
               TransactionRunner.TransactionCallable<Void> callable = invocation.getArgument(0);
               return callable.run(transactionContext);
             });
-    when(databaseClientMock.readWriteTransaction(any(), any())).thenReturn(transactionCallableMock);
+    when(databaseClientMock.readWriteTransaction(any(), any(), any()))
+        .thenReturn(transactionCallableMock);
 
     SpannerTransactionWriterDoFn spannerTransactionWriterDoFn =
         new SpannerTransactionWriterDoFn(
@@ -240,7 +242,7 @@ public class SpannerTransactionWriterDoFnTest {
         FailsafeElement.of(outputObject.toString(), outputObject.toString());
     Ddl ddl = getTestDdl();
 
-    when(processContextMock.element()).thenReturn(failsafeElement);
+    when(processContextMock.element()).thenReturn(KV.of(1L, failsafeElement));
     when(processContextMock.sideInput(any())).thenReturn(ddl);
     when(schema.isEmpty()).thenReturn(true);
 
@@ -290,7 +292,7 @@ public class SpannerTransactionWriterDoFnTest {
         FailsafeElement.of(outputObject.toString(), outputObject.toString());
     Ddl ddl = getTestDdl();
 
-    when(processContextMock.element()).thenReturn(failsafeElement);
+    when(processContextMock.element()).thenReturn(KV.of(1L, failsafeElement));
     when(processContextMock.sideInput(any())).thenReturn(ddl);
     when(processContextMock.getPipelineOptions()).thenReturn(options);
     when(schema.isEmpty()).thenReturn(true);
@@ -307,7 +309,8 @@ public class SpannerTransactionWriterDoFnTest {
               throw SpannerExceptionFactory.newSpannerException(
                   ErrorCode.ABORTED, "Transaction Aborted");
             });
-    when(databaseClientMock.readWriteTransaction(any(), any())).thenReturn(transactionCallableMock);
+    when(databaseClientMock.readWriteTransaction(any(), any(), any()))
+        .thenReturn(transactionCallableMock);
 
     SpannerTransactionWriterDoFn spannerTransactionWriterDoFn =
         new SpannerTransactionWriterDoFn(
@@ -355,7 +358,7 @@ public class SpannerTransactionWriterDoFnTest {
         FailsafeElement.of(outputObject.toString(), outputObject.toString());
     Ddl ddl = getTestDdl();
 
-    when(processContextMock.element()).thenReturn(failsafeElement);
+    when(processContextMock.element()).thenReturn(KV.of(1L, failsafeElement));
     when(processContextMock.sideInput(any())).thenReturn(ddl);
     when(processContextMock.getPipelineOptions()).thenReturn(options);
     when(schema.isEmpty()).thenReturn(true);
@@ -372,7 +375,8 @@ public class SpannerTransactionWriterDoFnTest {
               throw SpannerExceptionFactory.newSpannerException(
                   ErrorCode.FAILED_PRECONDITION, "title must not be NULL in table Books");
             });
-    when(databaseClientMock.readWriteTransaction(any(), any())).thenReturn(transactionCallableMock);
+    when(databaseClientMock.readWriteTransaction(any(), any(), any()))
+        .thenReturn(transactionCallableMock);
 
     SpannerTransactionWriterDoFn spannerTransactionWriterDoFn =
         new SpannerTransactionWriterDoFn(

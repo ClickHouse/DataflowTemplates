@@ -20,6 +20,7 @@ import static org.apache.beam.it.truthmatchers.PipelineAsserts.assertThatPipelin
 import com.google.cloud.datastream.v1.DestinationConfig;
 import com.google.cloud.datastream.v1.SourceConfig;
 import com.google.cloud.datastream.v1.Stream;
+import com.google.cloud.spanner.Dialect;
 import com.google.cloud.teleport.v2.spanner.migrations.transformation.CustomTransformation;
 import com.google.common.io.Resources;
 import com.google.pubsub.v1.SubscriptionName;
@@ -41,11 +42,15 @@ import org.apache.beam.it.common.utils.PipelineUtils;
 import org.apache.beam.it.conditions.ConditionCheck;
 import org.apache.beam.it.gcp.TemplateTestBase;
 import org.apache.beam.it.gcp.datastream.DatastreamResourceManager;
+import org.apache.beam.it.gcp.datastream.DatastreamResourceManager.DestinationOutputFormat;
 import org.apache.beam.it.gcp.datastream.JDBCSource;
+import org.apache.beam.it.gcp.datastream.OracleSource;
+import org.apache.beam.it.gcp.datastream.PostgresqlSource;
 import org.apache.beam.it.gcp.pubsub.PubsubResourceManager;
 import org.apache.beam.it.gcp.spanner.SpannerResourceManager;
 import org.apache.beam.it.gcp.spanner.matchers.SpannerAsserts;
 import org.apache.beam.it.gcp.storage.GcsResourceManager;
+import org.apache.beam.it.jdbc.JDBCResourceManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -58,10 +63,7 @@ public abstract class DataStreamToSpannerITBase extends TemplateTestBase {
   // Format of avro file path in GCS - {table}/2023/12/20/06/57/{fileName}
   public static final String DATA_STREAM_EVENT_FILES_PATH_FORMAT_IN_GCS = "%s/2023/12/20/06/57/%s";
   private static final Logger LOG = LoggerFactory.getLogger(DataStreamToSpannerITBase.class);
-  protected static final String VPC_NAME = "spanner-wide-row-pr-test-vpc";
-  protected static final String VPC_REGION = "us-central1";
-  protected static final String SUBNET_NAME = "regions/" + VPC_REGION + "/subnetworks/" + VPC_NAME;
-  protected static final Map<String, String> ADDITIONAL_JOB_PARAMS = new HashMap<>();
+
   public static final int CUTOVER_MILLIS = 30 * 1000;
 
   public PubsubResourceManager setUpPubSubResourceManager() throws IOException {
@@ -74,11 +76,19 @@ public abstract class DataStreamToSpannerITBase extends TemplateTestBase {
         .build();
   }
 
+  public SpannerResourceManager setUpPGDialectSpannerResourceManager() {
+    return SpannerResourceManager.builder(testName, PROJECT, REGION, Dialect.POSTGRESQL)
+        .maybeUseStaticInstance()
+        .build();
+  }
+
   public String generateSessionFile(
       int numOfTables, String srcDb, String spannerDb, List<String> tableNames, String sessionFile)
       throws IOException {
     String sessionFileContent =
-        sessionFile.replaceAll("SRC_DATABASE", srcDb).replaceAll("SP_DATABASE", spannerDb);
+        Resources.toString(Resources.getResource(sessionFile), StandardCharsets.UTF_8);
+    sessionFileContent =
+        sessionFileContent.replaceAll("SRC_DATABASE", srcDb).replaceAll("SP_DATABASE", spannerDb);
     for (int i = 1; i <= numOfTables; i++) {
       sessionFileContent = sessionFileContent.replaceAll("TABLE" + i, tableNames.get(i - 1));
     }
@@ -262,26 +272,44 @@ public abstract class DataStreamToSpannerITBase extends TemplateTestBase {
       JDBCSource jdbcSource)
       throws IOException {
 
+    LOG.info("Starting Dataflow job launch for identifier: {}", identifierSuffix);
+    LOG.info("GCS Path Prefix: {}", gcsPathPrefix);
+
     if (sessionFileResourceName != null) {
+      LOG.info("Uploading session file from resource: {}", sessionFileResourceName);
       gcsResourceManager.uploadArtifact(
           gcsPathPrefix + "/session.json",
           Resources.getResource(sessionFileResourceName).getPath());
+    } else {
+      LOG.info("No session file resource name provided, skipping upload.");
     }
 
     if (sessionResourceContent != null) {
+      LOG.info("Creating session file from content.");
       gcsResourceManager.createArtifact(gcsPathPrefix + "/session.json", sessionResourceContent);
+    } else {
+      LOG.info("No session file content provided, skipping creation.");
     }
 
     if (transformationContextFileResourceName != null) {
+      LOG.info(
+          "Uploading transformation context file from resource: {}",
+          transformationContextFileResourceName);
       gcsResourceManager.uploadArtifact(
           gcsPathPrefix + "/transformationContext.json",
           Resources.getResource(transformationContextFileResourceName).getPath());
+    } else {
+      LOG.info("No transformation context file provided, skipping upload.");
     }
 
     if (shardingContextFileResourceName != null) {
+      LOG.info(
+          "Uploading sharding context file from resource: {}", shardingContextFileResourceName);
       gcsResourceManager.uploadArtifact(
           gcsPathPrefix + "/shardingContext.json",
           Resources.getResource(shardingContextFileResourceName).getPath());
+    } else {
+      LOG.info("No sharding context file provided, skipping upload.");
     }
 
     String gcsPrefix =
@@ -311,13 +339,27 @@ public abstract class DataStreamToSpannerITBase extends TemplateTestBase {
                 getGcsPath(gcsPathPrefix + "/dlq/", gcsResourceManager));
             put("gcsPubSubSubscription", subscription.toString());
             put("dlqGcsPubSubSubscription", dlqSubscription.toString());
-            put("datastreamSourceType", "mysql");
             put("inputFileFormat", "avro");
+            put("workerMachineType", "n2-standard-4");
           }
         };
-    params.putAll(ADDITIONAL_JOB_PARAMS);
 
     if (jdbcSource != null) {
+      if (jdbcSource instanceof PostgresqlSource) {
+        params.put("datastreamSourceType", "postgresql");
+      } else if (jdbcSource instanceof OracleSource) {
+        params.put("datastreamSourceType", "oracle");
+      } else {
+        params.put("datastreamSourceType", "mysql");
+      }
+    } else {
+      params.put("datastreamSourceType", "mysql");
+    }
+
+    if (jdbcSource != null) {
+      LOG.info("JDBC source provided. Creating Datastream stream...");
+      LOG.info("Datastream GCS Destination Prefix: {}", gcsPrefix);
+      LOG.info("Datastream JDBC Source: {}", jdbcSource);
       params.put(
           "streamName",
           createDataStream(
@@ -325,11 +367,14 @@ public abstract class DataStreamToSpannerITBase extends TemplateTestBase {
                   gcsResourceManager,
                   gcsPrefix,
                   jdbcSource,
-                  DatastreamResourceManager.DestinationOutputFormat.JSON_FILE_FORMAT)
+                  DestinationOutputFormat.AVRO_FILE_FORMAT)
               .getName());
+      LOG.info("Successfully created Datastream stream and added to parameters.");
+    } else {
+      LOG.info("No JDBC source provided, skipping Datastream stream creation.");
     }
 
-    if (sessionFileResourceName != null) {
+    if (sessionFileResourceName != null || sessionResourceContent != null) {
       params.put(
           "sessionFilePath", getGcsPath(gcsPathPrefix + "/session.json", gcsResourceManager));
     }
@@ -347,10 +392,13 @@ public abstract class DataStreamToSpannerITBase extends TemplateTestBase {
     }
 
     if (customTransformation != null) {
+      LOG.info("Custom transformation provided: {}", customTransformation.classPath());
       params.put(
           "transformationJarPath",
           getGcsPath(gcsPathPrefix + "/" + customTransformation.jarPath(), gcsResourceManager));
       params.put("transformationClassName", customTransformation.classPath());
+    } else {
+      LOG.info("No custom transformation provided.");
     }
 
     // overridden parameters
@@ -365,9 +413,11 @@ public abstract class DataStreamToSpannerITBase extends TemplateTestBase {
     LaunchConfig.Builder options = LaunchConfig.builder(jobName, specPath);
 
     options.setParameters(params);
+    options.addEnvironment("ipConfiguration", "WORKER_IP_PRIVATE");
 
     // Run
-    LaunchInfo jobInfo = launchTemplate(options, false);
+    LOG.info("Launching Dataflow job with parameters: {}", params);
+    LaunchInfo jobInfo = launchTemplate(options);
     assertThatPipeline(jobInfo).isRunning();
 
     return jobInfo;
@@ -494,16 +544,40 @@ public abstract class DataStreamToSpannerITBase extends TemplateTestBase {
       String gcsPrefix,
       JDBCSource jdbcSource,
       DatastreamResourceManager.DestinationOutputFormat destinationOutputFormat) {
-    SourceConfig sourceConfig =
-        datastreamResourceManager.buildJDBCSourceConfig("jdbc-profile", jdbcSource);
+    try {
+      SourceConfig sourceConfig =
+          datastreamResourceManager.buildJDBCSourceConfig("jdbc-profile", jdbcSource);
 
-    DestinationConfig destinationConfig =
-        datastreamResourceManager.buildGCSDestinationConfig(
-            "gcs-profile", gcsResourceManager.getBucket(), gcsPrefix, destinationOutputFormat);
+      DestinationConfig destinationConfig =
+          datastreamResourceManager.buildGCSDestinationConfig(
+              "gcs-profile", gcsResourceManager.getBucket(), gcsPrefix, destinationOutputFormat);
 
-    Stream stream =
-        datastreamResourceManager.createStream("stream1", sourceConfig, destinationConfig);
-    datastreamResourceManager.startStream(stream);
-    return stream;
+      Stream stream =
+          datastreamResourceManager.createStream("stream1", sourceConfig, destinationConfig);
+      datastreamResourceManager.startStream(stream);
+      return stream;
+    } catch (Exception e) {
+      LOG.error("Error while creating datastream", e);
+      throw e;
+    }
+  }
+
+  protected void executeSqlScript(JDBCResourceManager resourceManager, String resourceName)
+      throws IOException {
+    String ddl =
+        String.join(
+            " ", Resources.readLines(Resources.getResource(resourceName), StandardCharsets.UTF_8));
+    ddl = ddl.trim();
+    List<String> ddls = Arrays.stream(ddl.split(";")).toList();
+    for (String d : ddls) {
+      if (!d.isBlank()) {
+        try {
+          resourceManager.runSQLUpdate(d);
+        } catch (Exception e) {
+          LOG.error("Exception while executing DDL {}", d, e);
+          throw e;
+        }
+      }
+    }
   }
 }

@@ -1161,6 +1161,33 @@ public class ImportFromAvroTest {
   }
 
   @Test
+  public void commitTimestampColumns() throws Exception {
+    SchemaBuilder.RecordBuilder<Schema> record = SchemaBuilder.record("commitTimestampColumns");
+    SchemaBuilder.FieldAssembler<Schema> fieldAssembler = record.fields();
+
+    fieldAssembler
+        // Primary key.
+        .requiredLong("id")
+        .optionalString("default_commit_ts");
+    Schema schema = fieldAssembler.endRecord();
+    String spannerSchema =
+        "CREATE TABLE `AvroTable` ("
+            + "`id`                INT64 NOT NULL,"
+            + "`default_commit_ts` TIMESTAMP DEFAULT (PENDING_COMMIT_TIMESTAMP())"
+            + " OPTIONS (allow_commit_timestamp=true),"
+            + ") PRIMARY KEY (`id`)";
+
+    runTest(
+        schema,
+        spannerSchema,
+        Arrays.asList(
+            new GenericRecordBuilder(schema)
+                .set("id", 1L)
+                .set("default_commit_ts", "2018-06-06T21:00:35.312000000Z")
+                .build()));
+  }
+
+  @Test
   public void models() throws Exception {
     Map<String, Schema> avroFiles = new HashMap<>();
     avroFiles.put(
@@ -1329,7 +1356,8 @@ public class ImportFromAvroTest {
             ValueProvider.StaticValueProvider.of(true),
             ValueProvider.StaticValueProvider.of(true),
             ValueProvider.StaticValueProvider.of(true),
-            ValueProvider.StaticValueProvider.of(30)));
+            ValueProvider.StaticValueProvider.of(30),
+            ValueProvider.StaticValueProvider.of(40)));
     PipelineResult importResult = importPipeline.run();
     importResult.waitUntilFinish();
 
@@ -1417,7 +1445,8 @@ public class ImportFromAvroTest {
             ValueProvider.StaticValueProvider.of(true),
             ValueProvider.StaticValueProvider.of(true),
             ValueProvider.StaticValueProvider.of(true),
-            ValueProvider.StaticValueProvider.of(30)));
+            ValueProvider.StaticValueProvider.of(30),
+            ValueProvider.StaticValueProvider.of(40)));
 
     PipelineResult importResult = importPipeline.run();
     importResult.waitUntilFinish();
@@ -1520,7 +1549,8 @@ public class ImportFromAvroTest {
             ValueProvider.StaticValueProvider.of(true),
             ValueProvider.StaticValueProvider.of(true),
             ValueProvider.StaticValueProvider.of(true),
-            ValueProvider.StaticValueProvider.of(30)));
+            ValueProvider.StaticValueProvider.of(30),
+            ValueProvider.StaticValueProvider.of(40)));
     PipelineResult importResult = importPipeline.run();
     importResult.waitUntilFinish();
 
@@ -1631,7 +1661,8 @@ public class ImportFromAvroTest {
             ValueProvider.StaticValueProvider.of(true),
             ValueProvider.StaticValueProvider.of(true),
             ValueProvider.StaticValueProvider.of(true),
-            ValueProvider.StaticValueProvider.of(30)));
+            ValueProvider.StaticValueProvider.of(30),
+            ValueProvider.StaticValueProvider.of(40)));
     PipelineResult importResult = importPipeline.run();
     importResult.waitUntilFinish();
 
@@ -1723,7 +1754,8 @@ public class ImportFromAvroTest {
             ValueProvider.StaticValueProvider.of(true),
             ValueProvider.StaticValueProvider.of(true),
             ValueProvider.StaticValueProvider.of(true),
-            ValueProvider.StaticValueProvider.of(30)));
+            ValueProvider.StaticValueProvider.of(30),
+            ValueProvider.StaticValueProvider.of(40)));
     PipelineResult importResult = importPipeline.run();
     importResult.waitUntilFinish();
 
@@ -1813,7 +1845,8 @@ public class ImportFromAvroTest {
             ValueProvider.StaticValueProvider.of(true),
             ValueProvider.StaticValueProvider.of(true),
             ValueProvider.StaticValueProvider.of(true),
-            ValueProvider.StaticValueProvider.of(30)));
+            ValueProvider.StaticValueProvider.of(30),
+            ValueProvider.StaticValueProvider.of(40)));
     PipelineResult importResult = importPipeline.run();
     importResult.waitUntilFinish();
 
@@ -1913,7 +1946,8 @@ public class ImportFromAvroTest {
             ValueProvider.StaticValueProvider.of(true),
             ValueProvider.StaticValueProvider.of(true),
             ValueProvider.StaticValueProvider.of(true),
-            ValueProvider.StaticValueProvider.of(30)));
+            ValueProvider.StaticValueProvider.of(30),
+            ValueProvider.StaticValueProvider.of(40)));
     PipelineResult importResult = importPipeline.run();
     importResult.waitUntilFinish();
 
@@ -1989,7 +2023,8 @@ public class ImportFromAvroTest {
             ValueProvider.StaticValueProvider.of(true),
             ValueProvider.StaticValueProvider.of(true),
             ValueProvider.StaticValueProvider.of(true),
-            ValueProvider.StaticValueProvider.of(30)));
+            ValueProvider.StaticValueProvider.of(30),
+            ValueProvider.StaticValueProvider.of(40)));
     PipelineResult importResult = importPipeline.run();
     importResult.waitUntilFinish();
 
@@ -2069,7 +2104,8 @@ public class ImportFromAvroTest {
             ValueProvider.StaticValueProvider.of(true),
             ValueProvider.StaticValueProvider.of(true),
             ValueProvider.StaticValueProvider.of(true),
-            ValueProvider.StaticValueProvider.of(30)));
+            ValueProvider.StaticValueProvider.of(30),
+            ValueProvider.StaticValueProvider.of(40)));
     PipelineResult importResult = importPipeline.run();
     importResult.waitUntilFinish();
   }
@@ -2136,7 +2172,8 @@ public class ImportFromAvroTest {
             ValueProvider.StaticValueProvider.of(true),
             ValueProvider.StaticValueProvider.of(true),
             ValueProvider.StaticValueProvider.of(true),
-            ValueProvider.StaticValueProvider.of(30)));
+            ValueProvider.StaticValueProvider.of(30),
+            ValueProvider.StaticValueProvider.of(40)));
     PipelineResult importResult = importPipeline.run();
     importResult.waitUntilFinish();
 
@@ -2223,7 +2260,8 @@ public class ImportFromAvroTest {
             ValueProvider.StaticValueProvider.of(true),
             ValueProvider.StaticValueProvider.of(true),
             ValueProvider.StaticValueProvider.of(true),
-            ValueProvider.StaticValueProvider.of(30)));
+            ValueProvider.StaticValueProvider.of(30),
+            ValueProvider.StaticValueProvider.of(40)));
     PipelineResult importResult = importPipeline.run();
     importResult.waitUntilFinish();
 
@@ -2318,7 +2356,8 @@ public class ImportFromAvroTest {
             ValueProvider.StaticValueProvider.of(true),
             ValueProvider.StaticValueProvider.of(true),
             ValueProvider.StaticValueProvider.of(true),
-            ValueProvider.StaticValueProvider.of(30)));
+            ValueProvider.StaticValueProvider.of(30),
+            ValueProvider.StaticValueProvider.of(40)));
     PipelineResult importResult = importPipeline.run();
     importResult.waitUntilFinish();
 

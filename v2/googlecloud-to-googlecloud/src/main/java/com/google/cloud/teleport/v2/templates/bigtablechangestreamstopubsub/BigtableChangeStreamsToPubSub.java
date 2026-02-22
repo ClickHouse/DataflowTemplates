@@ -75,6 +75,7 @@ import org.apache.beam.sdk.values.PCollectionList;
 import org.apache.beam.sdk.values.PCollectionTuple;
 import org.apache.beam.sdk.values.TupleTag;
 import org.apache.commons.lang3.StringUtils;
+import org.joda.time.Duration;
 import org.joda.time.Instant;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -104,7 +105,7 @@ import org.slf4j.LoggerFactory;
     },
     documentation =
         "https://cloud.google.com/dataflow/docs/guides/templates/provided/cloud-bigtable-change-streams-to-pubsub",
-    flexContainerName = "bigtable-changestreams-to-pubsub",
+    flexContainerName = "googlecloud-to-googlecloud",
     contactInformation = "https://cloud.google.com/support",
     streaming = true,
     supportsAtLeastOnce = true)
@@ -145,6 +146,11 @@ public final class BigtableChangeStreamsToPubSub {
     }
     if (options.getDlqMaxRetries() < 0) {
       throw new IllegalArgumentException("dlqMaxRetries cannot be negative.");
+    }
+    if (options.getBigtableReadChangeStreamTimeoutMs() != null
+        && options.getBigtableReadChangeStreamTimeoutMs() <= 0) {
+      throw new IllegalArgumentException(
+          "bigtableReadChangeStreamTimeoutMs must be greater than 0.");
     }
   }
 
@@ -274,6 +280,13 @@ public final class BigtableChangeStreamsToPubSub {
           readChangeStream.withMetadataTableTableId(
               options.getBigtableChangeStreamMetadataTableTableId());
     }
+
+    if (options.getBigtableReadChangeStreamTimeoutMs() != null) {
+      readChangeStream =
+          readChangeStream.withReadChangeStreamTimeout(
+              Duration.millis(options.getBigtableReadChangeStreamTimeoutMs()));
+    }
+
     // Step 2: just return the output for sending to pubSub and DLQ
     PCollection<ChangeStreamMutation> dataChangeRecord =
         pipeline

@@ -55,6 +55,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Random;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -63,6 +64,7 @@ import org.apache.beam.it.common.ResourceManager;
 import org.apache.beam.it.common.utils.ExceptionUtils;
 import org.apache.beam.it.gcp.TestConstants;
 import org.apache.beam.it.gcp.monitoring.MonitoringClient;
+import org.apache.parquet.Strings;
 import org.checkerframework.checker.nullness.qual.NonNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -194,7 +196,7 @@ public final class SpannerResourceManager implements ResourceManager {
 
       // Retry creation if there's a quota error
       Instance instance =
-          Failsafe.with(retryOnQuotaException())
+          Failsafe.with(retryOnQuotaException(5, Duration.ofMinutes(1), Duration.ofMinutes(2), 0.5))
               .get(() -> instanceAdminClient.createInstance(instanceInfo).get());
 
       hasInstance = true;
@@ -237,15 +239,21 @@ public final class SpannerResourceManager implements ResourceManager {
   }
 
   private static <T> RetryPolicy<T> retryOnQuotaException() {
+    return retryOnQuotaException(
+        CREATE_MAX_RETRIES, CREATE_BACKOFF_DELAY, CREATE_BACKOFF_MAX_DELAY, CREATE_BACKOFF_JITTER);
+  }
+
+  private static <T> RetryPolicy<T> retryOnQuotaException(
+      int maxRetries, Duration backoffDelay, Duration maxBackoffDelay, double backoffJitter) {
     return RetryPolicy.<T>builder()
         .handleIf(
             exception -> {
               LOG.warn("Error from spanner:", exception);
               return ExceptionUtils.containsMessage(exception, "RESOURCE_EXHAUSTED");
             })
-        .withMaxRetries(CREATE_MAX_RETRIES)
-        .withBackoff(CREATE_BACKOFF_DELAY, CREATE_BACKOFF_MAX_DELAY)
-        .withJitter(CREATE_BACKOFF_JITTER)
+        .withMaxRetries(maxRetries)
+        .withBackoff(backoffDelay, maxBackoffDelay)
+        .withJitter(backoffJitter)
         .build();
   }
 
@@ -335,6 +343,17 @@ public final class SpannerResourceManager implements ResourceManager {
     checkIsUsable();
     maybeCreateInstance();
     maybeCreateDatabase();
+  }
+
+  /**
+   * Creates and returns Spanner Database Client.
+   *
+   * @return Spanner Database Client
+   */
+  public synchronized DatabaseClient getDatabaseClient() {
+    checkIsUsable();
+    checkHasInstanceAndDatabase();
+    return spanner.getDatabaseClient(DatabaseId.of(projectId, instanceId, databaseId));
   }
 
   /**
@@ -651,18 +670,22 @@ public final class SpannerResourceManager implements ResourceManager {
      */
     @SuppressWarnings("nullness")
     public Builder maybeUseStaticInstance() {
-      if (System.getProperty("spannerInstanceId") != null
-          && projectId == "cloud-teleport-testing") {
+      String spannerInstanceId = System.getProperty("spannerInstanceId");
+      boolean isTestProject =
+          Objects.equals(projectId, "cloud-teleport-testing")
+              || Objects.equals(projectId, "span-cloud-teleport-testing");
+      boolean shouldPickRandomInstance =
+          Strings.isNullOrEmpty(spannerInstanceId) || Objects.equals(spannerInstanceId, "teleport");
+
+      if (isTestProject && shouldPickRandomInstance) {
         this.useStaticInstance = true;
-        List<String> instanceList = TestConstants.SPANNER_TEST_INSTANCES;
-        Random random = new Random();
-        int randomIndex = random.nextInt(instanceList.size());
-        String randomInstanceName = instanceList.get(randomIndex);
-        this.instanceId = randomInstanceName;
-      } else if (System.getProperty("spannerInstanceId") != null) {
+        List<String> staticInstanceList = TestConstants.SPANNER_TEST_INSTANCES;
+        this.instanceId = staticInstanceList.get(new Random().nextInt(staticInstanceList.size()));
+      } else if (spannerInstanceId != null) {
         this.useStaticInstance = true;
-        this.instanceId = System.getProperty("spannerInstanceId");
+        this.instanceId = spannerInstanceId;
       }
+      // Else useStaticInstance would remain false and a new Spanner test instance would be created.
       return this;
     }
 

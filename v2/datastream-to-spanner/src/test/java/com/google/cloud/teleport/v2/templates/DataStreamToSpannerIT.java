@@ -73,6 +73,7 @@ import org.junit.runners.Parameterized;
 @Category({TemplateIntegrationTest.class, SkipDirectRunnerTest.class})
 @TemplateIntegrationTest(DataStreamToSpanner.class)
 @RunWith(Parameterized.class)
+@Ignore("Triaging flaky test") // TODO(b/424086159)
 public class DataStreamToSpannerIT extends SpannerTemplateITBase {
 
   enum JDBCType {
@@ -108,7 +109,7 @@ public class DataStreamToSpannerIT extends SpannerTemplateITBase {
     datastreamResourceManager =
         DatastreamResourceManager.builder(testName, PROJECT, REGION)
             .setCredentialsProvider(credentialsProvider)
-            .setPrivateConnectivity("datastream-private-connect-us-central1")
+            .setPrivateConnectivity("datastream-connect-2")
             .build();
 
     gcsResourceManager = setUpSpannerITGcsResourceManager();
@@ -302,23 +303,26 @@ public class DataStreamToSpannerIT extends SpannerTemplateITBase {
     createPubSubNotifications();
     String jobName = PipelineUtils.createJobName(testName);
     PipelineLauncher.LaunchConfig.Builder options =
-        paramsAdder.apply(
-            PipelineLauncher.LaunchConfig.builder(jobName, specPath)
-                .addParameter("gcsPubSubSubscription", subscription.toString())
-                .addParameter("dlqGcsPubSubSubscription", dlqSubscription.toString())
-                .addParameter("streamName", stream.getName())
-                .addParameter("instanceId", spannerResourceManager.getInstanceId())
-                .addParameter("databaseId", spannerResourceManager.getDatabaseId())
-                .addParameter("projectId", PROJECT)
-                .addParameter(
-                    "deadLetterQueueDirectory", getGcsPath(testName, gcsResourceManager) + "/dlq/")
-                .addParameter("spannerHost", spannerResourceManager.getSpannerHost())
-                .addParameter(
-                    "inputFileFormat",
-                    fileFormat.equals(
-                            DatastreamResourceManager.DestinationOutputFormat.AVRO_FILE_FORMAT)
-                        ? "avro"
-                        : "json"));
+        paramsAdder
+            .apply(
+                PipelineLauncher.LaunchConfig.builder(jobName, specPath)
+                    .addParameter("gcsPubSubSubscription", subscription.toString())
+                    .addParameter("dlqGcsPubSubSubscription", dlqSubscription.toString())
+                    .addParameter("streamName", stream.getName())
+                    .addParameter("instanceId", spannerResourceManager.getInstanceId())
+                    .addParameter("databaseId", spannerResourceManager.getDatabaseId())
+                    .addParameter("projectId", PROJECT)
+                    .addParameter(
+                        "deadLetterQueueDirectory",
+                        getGcsPath(testName, gcsResourceManager) + "/dlq/")
+                    .addParameter("spannerHost", spannerResourceManager.getSpannerHost())
+                    .addParameter(
+                        "inputFileFormat",
+                        fileFormat.equals(
+                                DatastreamResourceManager.DestinationOutputFormat.AVRO_FILE_FORMAT)
+                            ? "avro"
+                            : "json"))
+            .addParameter("workerMachineType", "n2-standard-4");
 
     // Act
     PipelineLauncher.LaunchInfo info = launchTemplate(options);

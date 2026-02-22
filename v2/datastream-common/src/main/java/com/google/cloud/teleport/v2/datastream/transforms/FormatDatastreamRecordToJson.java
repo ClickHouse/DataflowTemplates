@@ -75,6 +75,7 @@ public class FormatDatastreamRecordToJson
   private String rowIdColumnName;
   private Map<String, String> renameColumns = new HashMap<String, String>();
   private boolean hashRowId = false;
+  private String datastreamSourceType;
 
   private static final Long DATETIME_POSITIVE_INFINITY = 9223372036825200000L;
   private static final Long DATETIME_NEGATIVE_INFINITY = -9223372036832400000L;
@@ -108,6 +109,12 @@ public class FormatDatastreamRecordToJson
   /** Set the reader to hash Oracle ROWID values into int. */
   public FormatDatastreamRecordToJson withHashRowId(Boolean hashRowId) {
     this.hashRowId = hashRowId;
+    return this;
+  }
+
+  /** Set the Datastream source type override. */
+  public FormatDatastreamRecordToJson withDatastreamSourceType(String datastreamSourceType) {
+    this.datastreamSourceType = datastreamSourceType;
     return this;
   }
 
@@ -147,6 +154,12 @@ public class FormatDatastreamRecordToJson
       outputObject.put("_metadata_schema", getMetadataSchema(record));
       outputObject.put("_metadata_lsn", getPostgresLsn(record));
       outputObject.put("_metadata_tx_id", getPostgresTxId(record));
+    } else if (sourceType.equals("backfill") || sourceType.equals("cdc")) {
+      // MongoDB Specific Metadata, MongoDB has different structure for sourceType.
+      outputObject.put("_metadata_timestamp_seconds", getSecondsFromMongoSortKeys(record));
+      outputObject.put("_metadata_timestamp_nanos", getNanosFromMongoSortKeys(record));
+      outputObject.put("_metadata_database", getSourceMetadata(record, "database"));
+      outputObject.put("_metadata_schema", getSourceMetadata(record, "schema"));
     } else {
       // Oracle Specific Metadata
       outputObject.put("_metadata_schema", getMetadataSchema(record));
@@ -202,6 +215,11 @@ public class FormatDatastreamRecordToJson
   }
 
   private String getSourceType(GenericRecord record) {
+    // If datastreamSourceType is provided, use it as override
+    if (this.datastreamSourceType != null && !this.datastreamSourceType.isEmpty()) {
+      return this.datastreamSourceType;
+    }
+
     String sourceType = record.get("read_method").toString().split("-")[0];
     // TODO: consider validating the value is mysql or oracle
     return sourceType;
@@ -241,7 +259,13 @@ public class FormatDatastreamRecordToJson
   }
 
   private String getMetadataTable(GenericRecord record) {
-    return ((GenericRecord) record.get("source_metadata")).get("table").toString();
+    GenericRecord sourceMetadata = (GenericRecord) record.get("source_metadata");
+    if (sourceMetadata.getSchema().getField("table") != null
+        && sourceMetadata.get("table") != null) {
+      return sourceMetadata.get("table").toString();
+    }
+
+    return null;
   }
 
   private String getMetadataChangeType(GenericRecord record) {
@@ -335,6 +359,22 @@ public class FormatDatastreamRecordToJson
     if (sourceMetadata.getSchema().getField("tx_id") != null
         && sourceMetadata.get("tx_id") != null) {
       return sourceMetadata.get("tx_id").toString();
+    }
+
+    return null;
+  }
+
+  private String getSecondsFromMongoSortKeys(GenericRecord record) {
+    if (record.get("sort_keys") != null) {
+      return ((GenericData.Array<?>) record.get("sort_keys")).get(0).toString();
+    }
+
+    return null;
+  }
+
+  private String getNanosFromMongoSortKeys(GenericRecord record) {
+    if (record.get("sort_keys") != null) {
+      return ((GenericData.Array<?>) record.get("sort_keys")).get(1).toString();
     }
 
     return null;

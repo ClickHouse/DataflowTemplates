@@ -102,7 +102,7 @@ public class DataStreamToSQLIT extends TemplateTestBase {
     datastreamResourceManager =
         DatastreamResourceManager.builder(testName, PROJECT, REGION)
             .setCredentialsProvider(credentialsProvider)
-            .setPrivateConnectivity("datastream-private-connect-us-central1")
+            .setPrivateConnectivity("datastream-connect-2")
             .build();
 
     String password = System.getProperty("cloudOracleSysPassword");
@@ -141,6 +141,12 @@ public class DataStreamToSQLIT extends TemplateTestBase {
   public void testDataStreamOracleToPostgresJson() throws IOException {
     // Run a simple IT
     simpleOracleToJdbcTest(JDBCType.POSTGRES, Function.identity());
+  }
+
+  @Test
+  public void testDataStreamWithLoginTimeout() throws IOException {
+    simpleOracleToJdbcTest(
+        JDBCType.POSTGRES, config -> config.addParameter("databaseLoginTimeout", "30"));
   }
 
   @Test

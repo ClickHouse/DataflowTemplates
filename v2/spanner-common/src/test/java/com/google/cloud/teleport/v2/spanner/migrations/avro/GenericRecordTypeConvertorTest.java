@@ -56,7 +56,7 @@ import org.apache.avro.SchemaBuilder;
 import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.avro.generic.GenericRecordBuilder;
-import org.apache.commons.collections.map.HashedMap;
+import org.apache.commons.collections4.map.HashedMap;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mockito;
@@ -452,9 +452,10 @@ public class GenericRecordTypeConvertorTest {
    */
   @Test
   public void testPrimitiveAndNonPrimitiveTypesHandling() throws InvalidTransformationException {
+    final String tableName = "few_types";
     Ddl ddl =
         Ddl.builder(Dialect.GOOGLE_STANDARD_SQL)
-            .createTable("few_types")
+            .createTable(tableName)
             .column("booleanCol")
             .bool()
             .notNull()
@@ -479,13 +480,24 @@ public class GenericRecordTypeConvertorTest {
             .endColumn()
             .endTable()
             .build();
+    final ISchemaMapper schemaMapper = new IdentityMapper(ddl);
     GenericRecordTypeConvertor genericRecordTypeConvertor =
-        new GenericRecordTypeConvertor(new IdentityMapper(ddl), "", null, null);
+        new GenericRecordTypeConvertor(schemaMapper, "", null, null);
+    /*
+     * BooleanNull Column and BooelanNotNullColumn test avro schema which
+     * is unioned with NUll and also columns that don't exist in Spanner DDL.
+     */
     Schema payloadSchema =
         SchemaBuilder.record("payload")
             .fields()
             .name("booleanCol")
             .type(SchemaBuilder.builder().booleanType())
+            .noDefault()
+            .name("booleanNullCol")
+            .type(SchemaBuilder.builder().unionOf().nullType().and().booleanType().endUnion())
+            .noDefault()
+            .name("booleanNotNullCol")
+            .type(SchemaBuilder.builder().unionOf().nullType().and().booleanType().endUnion())
             .noDefault()
             .name("intervalNanoCol")
             .type(AvroTestingHelper.INTERVAL_NANOS_SCHEMA)
@@ -511,6 +523,8 @@ public class GenericRecordTypeConvertorTest {
     GenericRecord payload =
         new GenericRecordBuilder(payloadSchema)
             .set("booleanCol", true)
+            .set("booleanNullCol", null)
+            .set("booleanNotNullCol", false)
             .set(
                 "intervalNanoCol",
                 AvroTestingHelper.createIntervalNanosRecord(
@@ -543,6 +557,42 @@ public class GenericRecordTypeConvertorTest {
                 Type.bool(),
                 getTestCassandraAnnotationNone()))
         .isEqualTo(Value.bool(true));
+    // Test Handling for DLQ path.
+    assertThat(
+            GenericRecordTypeConvertor.getJsonNodeObjectFromGenericRecord(
+                payload, payloadSchema.getField("booleanCol"), tableName, schemaMapper))
+        .isEqualTo(true);
+
+    assertThat(
+            genericRecordTypeConvertor.getSpannerValue(
+                payload.get("booleanNullCol"),
+                payloadSchema.getField("booleanNullCol").schema(),
+                "booleanNullCol",
+                Type.bool(),
+                getTestCassandraAnnotationNone()))
+        .isEqualTo(Value.bool(null));
+    // Test Handling for DLQ path for Null.
+    assertThat(
+            GenericRecordTypeConvertor.getJsonNodeObjectFromGenericRecord(
+                payload, payloadSchema.getField("booleanNullCol"), tableName, schemaMapper))
+        .isEqualTo(null);
+    assertThat(
+            GenericRecordTypeConvertor.getJsonNodeObjectFromGenericRecord(
+                null, payloadSchema.getField("booleanNullCol"), tableName, schemaMapper))
+        .isEqualTo(null);
+    assertThat(
+            genericRecordTypeConvertor.getSpannerValue(
+                payload.get("booleanNotNullCol"),
+                payloadSchema.getField("booleanNotNullCol").schema(),
+                "booleanNotNullCol",
+                Type.bool(),
+                getTestCassandraAnnotationNone()))
+        .isEqualTo(Value.bool(false));
+    // Test Handling for DLQ path for Null.
+    assertThat(
+            GenericRecordTypeConvertor.getJsonNodeObjectFromGenericRecord(
+                payload, payloadSchema.getField("booleanNotNullCol"), tableName, schemaMapper))
+        .isEqualTo(false);
 
     assertThat(
             genericRecordTypeConvertor.getSpannerValue(
@@ -551,7 +601,12 @@ public class GenericRecordTypeConvertorTest {
                 "intervalNanoCol",
                 Type.string(),
                 getTestCassandraAnnotationNone()))
-        .isEqualTo(Value.string("P1000Y1000M3890DT30H31M12.000000009S"));
+        .isEqualTo(Value.string("P1083Y4M3890DT30H31M12.000000009S"));
+    // Test Handling for DLQ path.
+    assertThat(
+            GenericRecordTypeConvertor.getJsonNodeObjectFromGenericRecord(
+                payload, payloadSchema.getField("intervalNanoCol"), tableName, schemaMapper))
+        .isEqualTo("P1083Y4M3890DT30H31M12.000000009S");
 
     assertThat(
             genericRecordTypeConvertor.getSpannerValue(
@@ -561,6 +616,11 @@ public class GenericRecordTypeConvertorTest {
                 Type.timestamp(),
                 getTestCassandraAnnotationNone()))
         .isEqualTo(Value.timestamp(Timestamp.parseTimestamp("2020-10-13T14:30:00.056000000Z")));
+    // Test Handling for DLQ path.
+    assertThat(
+            GenericRecordTypeConvertor.getJsonNodeObjectFromGenericRecord(
+                payload, payloadSchema.getField("timeStampCol"), tableName, schemaMapper))
+        .isEqualTo("2020-10-13T14:30:00.056Z");
 
     assertThat(
             genericRecordTypeConvertor.getSpannerValue(
@@ -570,6 +630,11 @@ public class GenericRecordTypeConvertorTest {
                 Type.array(Type.bool()),
                 getTestCassandraAnnotationNone()))
         .isEqualTo(Value.boolArray(ImmutableList.of(true, false)));
+    // Test Handling for DLQ path.
+    assertThat(
+            GenericRecordTypeConvertor.getJsonNodeObjectFromGenericRecord(
+                payload, payloadSchema.getField("booleanArrayCol"), tableName, schemaMapper))
+        .isEqualTo(ImmutableList.of(true, false).toArray());
 
     assertThat(
             genericRecordTypeConvertor.getSpannerValue(
@@ -581,9 +646,19 @@ public class GenericRecordTypeConvertorTest {
         .isEqualTo(
             Value.stringArray(
                 ImmutableList.of(
-                    "P1000Y1000M3890DT30H31M12.000000009S",
-                    "P1000Y1000M3890DT30H31M12.000000009S",
-                    "P1000Y1000M3890DT25H12.000000009S")));
+                    "P1083Y4M3890DT30H31M12.000000009S",
+                    "P1083Y4M3890DT30H31M12.000000009S",
+                    "P1083Y4M3890DT25H12.000000009S")));
+    // Test Handling for DLQ path.
+    assertThat(
+            GenericRecordTypeConvertor.getJsonNodeObjectFromGenericRecord(
+                payload, payloadSchema.getField("intervalNanoArrayCol"), tableName, schemaMapper))
+        .isEqualTo(
+            ImmutableList.of(
+                    "P1083Y4M3890DT30H31M12.000000009S",
+                    "P1083Y4M3890DT30H31M12.000000009S",
+                    "P1083Y4M3890DT25H12.000000009S")
+                .toArray());
 
     assertThat(
             genericRecordTypeConvertor.getSpannerValue(
@@ -593,6 +668,12 @@ public class GenericRecordTypeConvertorTest {
                 Type.array(Type.timestamp()),
                 getTestCassandraAnnotationNone()))
         .isEqualTo(Value.timestampArray(expectedTimeStampArray));
+
+    // Test Handling for DLQ path.
+    assertThat(
+            GenericRecordTypeConvertor.getJsonNodeObjectFromGenericRecord(
+                payload, payloadSchema.getField("timeStampArrayCol"), tableName, schemaMapper))
+        .isEqualTo(new String[] {"2020-10-13T14:30:00.056Z", null});
 
     /* Pass through for non-array types */
     assertThat(
@@ -607,16 +688,16 @@ public class GenericRecordTypeConvertorTest {
         .isEqualTo(
             Map.of(
                 "booleanCol", Value.bool(true),
-                "intervalNanoCol", Value.string("P1000Y1000M3890DT30H31M12.000000009S"),
+                "intervalNanoCol", Value.string("P1083Y4M3890DT30H31M12.000000009S"),
                 "timeStampCol",
                     Value.timestamp(Timestamp.parseTimestamp("2020-10-13T14:30:00.056000000Z")),
                 "booleanArrayCol", Value.boolArray(ImmutableList.of(true, false)),
                 "intervalNanoArrayCol",
                     Value.stringArray(
                         ImmutableList.of(
-                            "P1000Y1000M3890DT30H31M12.000000009S",
-                            "P1000Y1000M3890DT30H31M12.000000009S",
-                            "P1000Y1000M3890DT25H12.000000009S")),
+                            "P1083Y4M3890DT30H31M12.000000009S",
+                            "P1083Y4M3890DT30H31M12.000000009S",
+                            "P1083Y4M3890DT25H12.000000009S")),
                 "timeStampArrayCol", Value.timestampArray(expectedTimeStampArray)));
   }
 
@@ -631,10 +712,9 @@ public class GenericRecordTypeConvertorTest {
     result =
         GenericRecordTypeConvertor.handleRecordFieldType(
             "interval_nanos_column",
-            AvroTestingHelper.createIntervalNanosRecord(1000L, 1000L, 3890L, 25L, 331L, 12L, 9L),
+            AvroTestingHelper.createIntervalNanosRecord(1000L, 1000L, 3890L, 25L, 331L, 3672L, 9L),
             AvroTestingHelper.INTERVAL_NANOS_SCHEMA);
-    assertEquals(
-        "Test #1 interval nano conversion:", "P1000Y1000M3890DT30H31M12.000000009S", result);
+    assertEquals("Test #1 interval nano conversion:", "P1083Y4M3890DT31H32M12.000000009S", result);
 
     /* Test with any field set as null gets treated as 0. */
     result =
@@ -644,7 +724,7 @@ public class GenericRecordTypeConvertorTest {
             AvroTestingHelper.INTERVAL_NANOS_SCHEMA);
     assertEquals(
         "Test #2 interval nano conversion with null minutes:",
-        "P1000Y1000M3890DT25H12.000000009S",
+        "P1083Y4M3890DT25H12.000000009S",
         result);
 
     /* Basic test for negative field. */
@@ -655,8 +735,18 @@ public class GenericRecordTypeConvertorTest {
             AvroTestingHelper.INTERVAL_NANOS_SCHEMA);
     assertEquals(
         "Test #3 interval nano conversion with negative months:",
-        "P1000Y-1000M3890DT25H31M12.000000009S",
+        "P916Y8M3890DT25H31M12.000000009S",
         result);
+
+    /* Test all negative */
+    result =
+        GenericRecordTypeConvertor.handleRecordFieldType(
+            "interval_nanos_column",
+            AvroTestingHelper.createIntervalNanosRecord(
+                -1000L, -1000L, -3890L, -2L, -31L, -12L, -90L),
+            AvroTestingHelper.INTERVAL_NANOS_SCHEMA);
+    assertEquals(
+        "Test #4 all fields are negative:", "P-1083Y-4M-3890DT-2H-31M-12.00000009S", result);
 
     /* Test that negative nanos subtract from the fractional seconds, for example 12 Seconds -1 Nanos becomes 11.999999991s. */
     result =
@@ -665,8 +755,8 @@ public class GenericRecordTypeConvertorTest {
             AvroTestingHelper.createIntervalNanosRecord(1000L, 31L, 3890L, 25L, 31L, 12L, -9L),
             AvroTestingHelper.INTERVAL_NANOS_SCHEMA);
     assertEquals(
-        "Test #4 interval nano conversion with negative nanos:",
-        "P1000Y31M3890DT25H31M11.999999991S",
+        "Test #5 interval nano conversion with negative nanos:",
+        "P1002Y7M3890DT25H31M11.999999991S",
         result);
 
     /* Test 0 interval. */
@@ -675,7 +765,7 @@ public class GenericRecordTypeConvertorTest {
             "interval_nanos_column",
             AvroTestingHelper.createIntervalNanosRecord(0L, 0L, 0L, 0L, 0L, 0L, 0L),
             AvroTestingHelper.INTERVAL_NANOS_SCHEMA);
-    assertEquals("Test #5 interval nano conversion with all zeros", "P0D", result);
+    assertEquals("Test #6 interval nano conversion with all zeros", "P0Y", result);
 
     /* Test almost zero interval with only nanos set. */
     result =
@@ -683,7 +773,7 @@ public class GenericRecordTypeConvertorTest {
             "interval_nanos_column",
             AvroTestingHelper.createIntervalNanosRecord(0L, 0L, 0L, 0L, 0L, 0L, 1L),
             AvroTestingHelper.INTERVAL_NANOS_SCHEMA);
-    assertEquals("Test #6 interval nano conversion with only nanos", "P0DT0.000000001S", result);
+    assertEquals("Test #7 interval nano conversion with only nanos", "PT0.000000001S", result);
     /* Test with large values. */
     result =
         GenericRecordTypeConvertor.handleRecordFieldType(
@@ -692,7 +782,7 @@ public class GenericRecordTypeConvertorTest {
                 2147483647L, 11L, 2147483647L, 2147483647L, 2147483647L, 2147483647L, 999999999L),
             AvroTestingHelper.INTERVAL_NANOS_SCHEMA);
     assertEquals(
-        "Test #6 interval nano conversion with INT.MAX values",
+        "Test #8 interval nano conversion with INT.MAX values",
         "P2147483647Y11M2147483647DT2183871564H21M7.999999999S",
         result);
 
@@ -710,9 +800,65 @@ public class GenericRecordTypeConvertorTest {
                 -999999999L),
             AvroTestingHelper.INTERVAL_NANOS_SCHEMA);
     assertEquals(
-        "Test #6 interval nano conversion with -INT.MAX values",
+        "Test #9 interval nano conversion with -INT.MAX values",
         "P-2147483647Y-11M-2147483647DT-2183871564H-21M-7.999999999S",
         result);
+
+    /* Test with only year part */
+    result =
+        GenericRecordTypeConvertor.handleRecordFieldType(
+            "interval_nanos_column",
+            AvroTestingHelper.createIntervalNanosRecord(1L, 0L, 0L, 0L, 0L, 0L, 0L),
+            AvroTestingHelper.INTERVAL_NANOS_SCHEMA);
+    assertEquals("Test #10 interval nano conversion with only years", "P1Y", result);
+
+    /* Test with only month part */
+    result =
+        GenericRecordTypeConvertor.handleRecordFieldType(
+            "interval_nanos_column",
+            AvroTestingHelper.createIntervalNanosRecord(0L, -1L, 0L, 0L, 0L, 0L, 0L),
+            AvroTestingHelper.INTERVAL_NANOS_SCHEMA);
+    assertEquals("Test #11 interval nano conversion with only months", "P-1M", result);
+
+    /* Test with only days part */
+    result =
+        GenericRecordTypeConvertor.handleRecordFieldType(
+            "interval_nanos_column",
+            AvroTestingHelper.createIntervalNanosRecord(0L, 0L, 1L, 0L, 0L, 0L, 0L),
+            AvroTestingHelper.INTERVAL_NANOS_SCHEMA);
+    assertEquals("Test #12 interval nano conversion with only days", "P1D", result);
+
+    /* Test with only hours part */
+    result =
+        GenericRecordTypeConvertor.handleRecordFieldType(
+            "interval_nanos_column",
+            AvroTestingHelper.createIntervalNanosRecord(0L, 0L, 0L, -1L, 0L, 0L, 0L),
+            AvroTestingHelper.INTERVAL_NANOS_SCHEMA);
+    assertEquals("Test #13 interval nano conversion with only hours", "PT-1H", result);
+
+    /* Test with only minutes part */
+    result =
+        GenericRecordTypeConvertor.handleRecordFieldType(
+            "interval_nanos_column",
+            AvroTestingHelper.createIntervalNanosRecord(0L, 0L, 0L, 0L, 12L, 0L, 0L),
+            AvroTestingHelper.INTERVAL_NANOS_SCHEMA);
+    assertEquals("Test #14 interval nano conversion with only minutes", "PT12M", result);
+
+    /* Test with only seconds part */
+    result =
+        GenericRecordTypeConvertor.handleRecordFieldType(
+            "interval_nanos_column",
+            AvroTestingHelper.createIntervalNanosRecord(0L, 0L, 0L, 0L, 0L, 1L, 0L),
+            AvroTestingHelper.INTERVAL_NANOS_SCHEMA);
+    assertEquals("Test #15 interval nano conversion with only seconds", "PT1S", result);
+
+    /* Test with only nanos part */
+    result =
+        GenericRecordTypeConvertor.handleRecordFieldType(
+            "interval_nanos_column",
+            AvroTestingHelper.createIntervalNanosRecord(0L, 0L, 0L, 0L, 0L, 0L, 100L),
+            AvroTestingHelper.INTERVAL_NANOS_SCHEMA);
+    assertEquals("Test #16 interval nano conversion with only nanos", "PT0.0000001S", result);
   }
 
   @Test
@@ -1261,6 +1407,68 @@ public class GenericRecordTypeConvertorTest {
     assertEquals(Value.string("name1"), actual.get("new_name"));
   }
 
+  @Test
+  public void transformChangeEventTest_LongValueFromCustomTransform()
+      throws InvalidTransformationException {
+    /*
+     * This test verifies that if a Custom Transformation returns a Long value for a column
+     * mapped to BYTES in Spanner, it is treated as a LONG schema (not STRING),
+     * and thus converted correctly (Long -> BigInteger -> ByteArray) instead of
+     * being interpreted as a Hex String.
+     */
+    GenericRecord genericRecord = new GenericData.Record(getAllSpannerTypesSchema());
+    genericRecord.put("int_col", 123L);
+
+    // Define a transformer that returns a Long value for 'bytes_col'
+    ISpannerMigrationTransformer longTransformer =
+        new ISpannerMigrationTransformer() {
+          @Override
+          public void init(String customParameters) {}
+
+          @Override
+          public MigrationTransformationResponse toSpannerRow(
+              MigrationTransformationRequest request) {
+            Map<String, Object> responseRow = new HashMap<>();
+            // Return a Long value. In a real scenario, this comes from a BIT column read as Long.
+            // 0x7FFFFFFFFFFFFFFF = 9223372036854775807L
+            responseRow.put("bytes_col", 9223372036854775807L);
+            return new MigrationTransformationResponse(responseRow, false);
+          }
+
+          @Override
+          public MigrationTransformationResponse toSourceRow(
+              MigrationTransformationRequest request) {
+            return null;
+          }
+
+          @Override
+          public MigrationTransformationResponse transformFailedSpannerMutation(
+              MigrationTransformationRequest request) throws InvalidTransformationException {
+            return new MigrationTransformationResponse(request.getRequestRow(), false);
+          }
+        };
+
+    GenericRecordTypeConvertor genericRecordTypeConvertor =
+        new GenericRecordTypeConvertor(
+            new IdentityMapper(getIdentityDdl()), "", null, longTransformer);
+
+    Map<String, Value> actual =
+        genericRecordTypeConvertor.transformChangeEvent(genericRecord, "all_types");
+
+    // Expected: The Long value 9223372036854775807L should be converted to BYTES.
+    // 9223372036854775807L is 0x7FFFFFFFFFFFFFFF.
+    // If it were treated as String, it would try to Hex decode "9223372036854775807", which is
+    // invalid hex (odd length, non-hex chars if any).
+    // Actually "9223372036854775807" contains only digits so it might be parseable as hex if length
+    // was even,
+    // but here we want to ensure it uses the numeric conversion.
+    // 0x7FFFFFFFFFFFFFFF as bytes is [127, -1, -1, -1, -1, -1, -1, -1]
+    byte[] expectedBytes =
+        new byte[] {127, -1, -1, -1, -1, -1, -1, -1}; // Signed bytes for 0x7F FF...
+
+    assertEquals(Value.bytes(ByteArray.copyFrom(expectedBytes)), actual.get("bytes_col"));
+  }
+
   private class TestCustomTransform implements ISpannerMigrationTransformer {
 
     private Map<String, Value> expected;
@@ -1295,6 +1503,12 @@ public class GenericRecordTypeConvertorTest {
         throws InvalidTransformationException {
       return null;
     }
+
+    @Override
+    public MigrationTransformationResponse transformFailedSpannerMutation(
+        MigrationTransformationRequest request) throws InvalidTransformationException {
+      return new MigrationTransformationResponse(request.getRequestRow(), false);
+    }
   }
 
   private CassandraAnnotations getTestCassandraAnnotation(String annotation) {
@@ -1303,5 +1517,57 @@ public class GenericRecordTypeConvertorTest {
 
   private CassandraAnnotations getTestCassandraAnnotationNone() {
     return getTestCassandraAnnotation("");
+  }
+
+  @Test
+  public void testGeneratedColumnFiltering() throws InvalidTransformationException {
+    final String tableName = "generated_col_table";
+    Ddl ddl =
+        Ddl.builder(Dialect.GOOGLE_STANDARD_SQL)
+            .createTable(tableName)
+            .column("id")
+            .int64()
+            .notNull()
+            .endColumn()
+            .column("gen_col")
+            .int64()
+            .generatedAs("id * 2")
+            .endColumn()
+            .column("val_col")
+            .string()
+            .endColumn()
+            .endTable()
+            .build();
+    final ISchemaMapper schemaMapper = new IdentityMapper(ddl);
+    GenericRecordTypeConvertor genericRecordTypeConvertor =
+        new GenericRecordTypeConvertor(schemaMapper, "", null, null);
+
+    Schema payloadSchema =
+        SchemaBuilder.record("payload")
+            .fields()
+            .name("id")
+            .type(SchemaBuilder.builder().longType())
+            .noDefault()
+            .name("gen_col")
+            .type(SchemaBuilder.builder().longType())
+            .noDefault()
+            .name("val_col")
+            .type(SchemaBuilder.builder().stringType())
+            .noDefault()
+            .endRecord();
+
+    GenericRecord payload =
+        new GenericRecordBuilder(payloadSchema)
+            .set("id", 100L)
+            .set("gen_col", 200L) // Source has data for generated column
+            .set("val_col", "test")
+            .build();
+
+    Map<String, Value> result = genericRecordTypeConvertor.transformChangeEvent(payload, tableName);
+
+    // Verify that "gen_col" is NOT in the result map
+    assertThat(result).containsEntry("id", Value.int64(100L));
+    assertThat(result).containsEntry("val_col", Value.string("test"));
+    assertThat(result).doesNotContainKey("gen_col");
   }
 }

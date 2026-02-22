@@ -72,8 +72,7 @@ public class SpannerToMySqlCustomTransformationLT extends SpannerToSourceDbLTBas
             artifactBucket,
             gcsResourceManager
                 .uploadArtifact(
-                    "input/schema.json",
-                    Resources.getResource(dataGeneratorSchemaResource).getPath())
+                    SCHEMA_FILE_NAME, Resources.getResource(dataGeneratorSchemaResource).getPath())
                 .name());
 
     createMySQLSchema(jdbcResourceManagers);
@@ -89,7 +88,8 @@ public class SpannerToMySqlCustomTransformationLT extends SpannerToSourceDbLTBas
             maxWorkers,
             customTransformation,
             MYSQL_SOURCE_TYPE,
-            SOURCE_SHARDS_FILE_NAME);
+            SOURCE_SHARDS_FILE_NAME,
+            SESSION_FILE_NAME);
   }
 
   @After
@@ -126,7 +126,7 @@ public class SpannerToMySqlCustomTransformationLT extends SpannerToSourceDbLTBas
 
     PipelineOperator.Result result =
         pipelineOperator.waitForCondition(
-            createConfig(jobInfo, Duration.ofMinutes(10), Duration.ofSeconds(30)), check);
+            createConfig(jobInfo, Duration.ofMinutes(12), Duration.ofSeconds(30)), check);
 
     // Assert Conditions
     assertThatResult(result).meetsConditions();

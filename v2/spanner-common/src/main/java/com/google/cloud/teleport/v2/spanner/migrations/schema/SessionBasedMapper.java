@@ -70,15 +70,13 @@ public class SessionBasedMapper implements ISchemaMapper, Serializable {
       throws InputMismatchException {
     this.schema = schema;
     this.ddl = ddl;
-    try {
-      validateSchemaAndDdl(schema, ddl);
-      LOG.info("schema matches between session file and spanner");
-    } catch (InputMismatchException e) {
-      if (strictCheckSchema) {
+    if (strictCheckSchema) {
+      try {
+        validateSchemaAndDdl(schema, ddl);
+        LOG.info("schema matches between session file and spanner");
+      } catch (InputMismatchException e) {
         LOG.warn("schema does not match between session and spanner: {}", e.getMessage());
         throw e;
-      } else {
-        LOG.warn("proceeding without schema match between session and spanner");
       }
     }
   }
@@ -319,6 +317,16 @@ public class SessionBasedMapper implements ISchemaMapper, Serializable {
     try {
       getSourceColumnName(namespace, spannerTable, spannerColumn);
       return true;
+    } catch (NoSuchElementException e) {
+      return false;
+    }
+  }
+
+  @Override
+  public boolean isGeneratedColumn(String namespace, String spannerTable, String spannerColumn) {
+    try {
+      Column col = getCol(namespace, spannerTable, spannerColumn);
+      return col.isGenerated();
     } catch (NoSuchElementException e) {
       return false;
     }

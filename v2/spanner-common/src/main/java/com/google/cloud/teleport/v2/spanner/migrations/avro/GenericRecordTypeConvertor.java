@@ -40,8 +40,10 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import javax.annotation.Nullable;
 import org.apache.arrow.util.VisibleForTesting;
 import org.apache.avro.Conversions;
 import org.apache.avro.LogicalType;
@@ -93,6 +95,34 @@ public class GenericRecordTypeConvertor {
     this.customTransformer = customTransformer;
   }
 
+  public static Object getJsonNodeObjectFromGenericRecord(
+      @Nullable GenericRecord record,
+      Schema.Field f,
+      String srcTableName,
+      ISchemaMapper schemaMapper) {
+    String fieldName = f.name();
+    if (record == null) {
+      return null;
+    }
+    Object recordValue = record.get(fieldName);
+    if (recordValue == null) {
+      return null;
+    }
+    Schema fieldSchema = filterNullSchema(f.schema(), fieldName, recordValue);
+    CassandraAnnotations cassandraAnnotations = null;
+    try {
+      cassandraAnnotations =
+          schemaMapper.getSpannerColumnCassandraAnnotations(
+              "",
+              schemaMapper.getSpannerTableName("", srcTableName),
+              schemaMapper.getSpannerColumnName("", srcTableName, fieldName));
+    } catch (NoSuchElementException e) {
+      // For Non-Existant Columns or Tables, we initialize Cassandra Annotations to empty array.
+      cassandraAnnotations = CassandraAnnotations.fromColumnOptions(List.of(), fieldName);
+    }
+    return handleNonPrimitiveAvroTypes(recordValue, fieldSchema, fieldName, cassandraAnnotations);
+  }
+
   /**
    * This method takes in a generic record and returns a map between the Spanner column name and the
    * corresponding Spanner column value. This handles the data conversion logic from a GenericRecord
@@ -125,6 +155,11 @@ public class GenericRecordTypeConvertor {
         // If current column is migration shard id, populate value.
         if (spannerColName.equals(shardIdCol)) {
           result = populateShardId(result, shardIdCol);
+          continue;
+        }
+
+        // If the column is generated, we skip it as it's read-only in Spanner.
+        if (schemaMapper.isGeneratedColumn(namespace, spannerTableName, spannerColName)) {
           continue;
         }
 
@@ -230,9 +265,22 @@ public class GenericRecordTypeConvertor {
       String spannerColName = entry.getKey();
       Type spannerType =
           schemaMapper.getSpannerColumnType(namespace, spannerTableName, spannerColName);
-      Value val =
-          getSpannerValueFromObject(
-              entry.getValue(), CUSTOM_TRANSFORMATION_AVRO_SCHEMA, spannerColName, spannerType);
+      Schema schema = CUSTOM_TRANSFORMATION_AVRO_SCHEMA;
+      if (entry.getValue() instanceof Long || entry.getValue() instanceof Integer) {
+        /*
+         * When a custom transformation returns a Long or Integer, we must treat it as a LONG schema.
+         * This is critical for BIT columns which are read as Longs from the source (e.g. MySQL).
+         * If we use the default CUSTOM_TRANSFORMATION_AVRO_SCHEMA (which is STRING),
+         * AvroToValueMapper will convert the Long to a String (e.g. "9223372036854775807") and then
+         * attempt to interpret that decimal string as a Hex-encoded string if the target Spanner type is BYTES.
+         * This results in incorrect byte values (e.g. 0x0922...).
+         *
+         * By passing a LONG schema, AvroToValueMapper uses the correct conversion path:
+         * Long -> BigInteger -> ByteArray, which preserves the correct binary representation (e.g. 0x7F...).
+         */
+        schema = Schema.create(Schema.Type.LONG);
+      }
+      Value val = getSpannerValueFromObject(entry.getValue(), schema, spannerColName, spannerType);
       result.put(spannerColName, val);
     }
     LOG.debug("Updated record with custom transformations for table {}: {}", srcTableName, result);
@@ -413,7 +461,8 @@ public class GenericRecordTypeConvertor {
    * not a union, or if it's a union with more than two types or a non-nullable type other than
    * NULL, an IllegalArgumentException is thrown.
    */
-  private Schema filterNullSchema(Schema fieldSchema, String recordColName, Object recordValue) {
+  private static Schema filterNullSchema(
+      Schema fieldSchema, String recordColName, Object recordValue) {
     if (fieldSchema.getType().equals(Schema.Type.UNION)) {
       List<Schema> types = fieldSchema.getTypes();
       LOG.debug("found union type: {}", types);
@@ -677,13 +726,9 @@ public class GenericRecordTypeConvertor {
           Period.ZERO
               .plusYears(((Number) getOrDefault(element, "years", 0L)).longValue())
               .plusMonths(((Number) getOrDefault(element, "months", 0L)).longValue())
-              .plusDays(((Number) getOrDefault(element, "days", 0L)).longValue());
-      /*
-       * Convert the period to a ISO-8601 period formatted String, such as P6Y3M1D.
-       * A zero period will be represented as zero days, 'P0D'.
-       * Refer to javadoc for Period#toString.
-       */
-      String periodIso8061 = period.toString();
+              .plusDays(((Number) getOrDefault(element, "days", 0L)).longValue())
+              .normalized(); // Normalize years and months
+
       java.time.Duration duration =
           java.time.Duration.ZERO
               .plusHours(((Number) getOrDefault(element, "hours", 0L)).longValue())
@@ -694,13 +739,19 @@ public class GenericRecordTypeConvertor {
        * Convert the duration to a ISO-8601 period formatted String, such as  PT8H6M12.345S
        * refer to javadoc for Duration#toString.
        */
-      String durationIso8610 = duration.toString();
-      // Convert to ISO-8601 period format.
-      if (duration.isZero()) {
-        return periodIso8061;
-      } else {
-        return periodIso8061 + StringUtils.removeStartIgnoreCase(durationIso8610, "P");
+      if (period.isZero() && duration.isZero()) {
+        // Interval of length 0 is represented as P0Y.
+        return "P0Y";
+      } else if (period.isZero()) {
+        // If year-month-day part is 0, get ISO8601 formatted string from duration part.
+        return duration.toString();
+      } else if (duration.isZero()) {
+        // If hour-minute-second part is 0, get ISO8601 formatted string from period part.
+        return period.toString();
       }
+
+      // Combine both non-zero parts into ISO8601 string.
+      return period + StringUtils.removeStartIgnoreCase(duration.toString(), "P");
     } else {
       throw new UnsupportedOperationException(
           String.format(

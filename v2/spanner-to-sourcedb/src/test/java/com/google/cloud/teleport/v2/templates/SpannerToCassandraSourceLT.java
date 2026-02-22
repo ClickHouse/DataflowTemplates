@@ -66,8 +66,7 @@ public class SpannerToCassandraSourceLT extends SpannerToCassandraLTBase {
             artifactBucket,
             gcsResourceManager
                 .uploadArtifact(
-                    "input/schema.json",
-                    Resources.getResource(dataGeneratorSchemaResource).getPath())
+                    SCHEMA_FILE_NAME, Resources.getResource(dataGeneratorSchemaResource).getPath())
                 .name());
     jobInfo =
         launchDataflowJob(
@@ -76,7 +75,8 @@ public class SpannerToCassandraSourceLT extends SpannerToCassandraLTBase {
             maxWorkers,
             null,
             CASSANDRA_SOURCE_TYPE,
-            SOURCE_SHARDS_FILE_NAME);
+            SOURCE_SHARDS_FILE_NAME,
+            null);
   }
 
   @After

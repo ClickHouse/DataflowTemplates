@@ -38,6 +38,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 import org.apache.beam.it.common.PipelineLauncher;
+import org.apache.beam.it.common.PipelineLauncher.LaunchInfo;
 import org.apache.beam.it.common.TestProperties;
 import org.apache.beam.it.conditions.ConditionCheck;
 import org.apache.beam.it.gcp.TemplateTestBase;
@@ -110,6 +111,30 @@ public abstract class DataStreamToSpannerFTBase extends TemplateTestBase {
     return subscription;
   }
 
+  public TopicName createPubsubTopic(
+      String identifierSuffix, PubsubResourceManager pubsubResourceManager) {
+    String topicNameSuffix = "FT-" + identifierSuffix;
+    TopicName topic = pubsubResourceManager.createTopic(topicNameSuffix);
+    return topic;
+  }
+
+  public SubscriptionName createPubsubSubscription(
+      String identifierSuffix, PubsubResourceManager pubsubResourceManager, TopicName topic) {
+    String subscriptionNameSuffix = "FT-" + identifierSuffix;
+    SubscriptionName subscription =
+        pubsubResourceManager.createSubscription(topic, subscriptionNameSuffix);
+    return subscription;
+  }
+
+  public void createGcsPubsubNotification(
+      TopicName topic, String gcsPrefix, GcsResourceManager gcsResourceManager) {
+    String prefix = gcsPrefix;
+    if (prefix.startsWith("/")) {
+      prefix = prefix.substring(1);
+    }
+    gcsResourceManager.createNotification(topic.toString(), prefix);
+  }
+
   public String getGcsFullPath(
       GcsResourceManager gcsResourceManager, String artifactId, String identifierSuffix) {
     return ArtifactUtils.getFullGcsPath(
@@ -154,32 +179,64 @@ public abstract class DataStreamToSpannerFTBase extends TemplateTestBase {
     datastreamResourceManager =
         DatastreamResourceManager.builder(testName, PROJECT, REGION)
             .setCredentialsProvider(credentialsProvider)
-            .setPrivateConnectivity("datastream-private-connect-us-central1")
+            .setPrivateConnectivity("datastream-connect-2")
             .build();
     Stream stream =
         createDataStreamResources(
             artifactBucket, gcsPrefix, sourceConnectionProfile, datastreamResourceManager);
 
     // launch dataflow template
-    FlexTemplateDataflowJobResourceManager flexTemplateDataflowJobResourceManager =
+    LaunchInfo jobInfo =
+        launchFwdDataflowJob(
+            spannerResourceManager,
+            gcsPrefix,
+            stream.getName(),
+            dlqGcsPrefix,
+            subscription.toString(),
+            dlqSubscription.toString(),
+            flexTemplateDataflowJobResourceManagerBuilder,
+            null);
+    assertThatPipeline(jobInfo).isRunning();
+    return jobInfo;
+  }
+
+  public PipelineLauncher.LaunchInfo launchFwdDataflowJob(
+      SpannerResourceManager spannerResourceManager,
+      String gcsPrefix,
+      String streamName,
+      String dlqGcsPrefix,
+      String pubSubSubscription,
+      String dlqPubSubSubscription,
+      FlexTemplateDataflowJobResourceManager.Builder flexTemplateDataflowJobResourceManagerBuilder,
+      SpannerResourceManager shadowTableSpannerResourceManager)
+      throws IOException {
+    String artifactBucket = TestProperties.artifactBucket();
+
+    // launch dataflow template
+    FlexTemplateDataflowJobResourceManager.Builder flexTemplateBuilder =
         flexTemplateDataflowJobResourceManagerBuilder
             .withTemplateName("Cloud_Datastream_to_Spanner")
             .withTemplateModulePath("v2/datastream-to-spanner")
             .addParameter("inputFilePattern", getGcsPath(artifactBucket, gcsPrefix))
-            .addParameter("streamName", stream.getName())
+            .addParameter("streamName", streamName)
             .addParameter("instanceId", spannerResourceManager.getInstanceId())
             .addParameter("databaseId", spannerResourceManager.getDatabaseId())
             .addParameter("projectId", PROJECT)
             .addParameter("deadLetterQueueDirectory", getGcsPath(artifactBucket, dlqGcsPrefix))
-            .addParameter("gcsPubSubSubscription", subscription.toString())
-            .addParameter("dlqGcsPubSubSubscription", dlqSubscription.toString())
+            .addParameter("gcsPubSubSubscription", pubSubSubscription)
+            .addParameter("dlqGcsPubSubSubscription", dlqPubSubSubscription)
             .addParameter("datastreamSourceType", "mysql")
-            .addParameter("inputFileFormat", "avro")
-            .build();
+            .addParameter("inputFileFormat", "avro");
+
+    if (shadowTableSpannerResourceManager != null) {
+      flexTemplateBuilder.addParameter(
+          "shadowTableSpannerInstanceId", shadowTableSpannerResourceManager.getInstanceId());
+      flexTemplateBuilder.addParameter(
+          "shadowTableSpannerDatabaseId", shadowTableSpannerResourceManager.getDatabaseId());
+    }
 
     // Run
-    PipelineLauncher.LaunchInfo jobInfo = flexTemplateDataflowJobResourceManager.launchJob();
-    assertThatPipeline(jobInfo).isRunning();
+    PipelineLauncher.LaunchInfo jobInfo = flexTemplateBuilder.build().launchJob();
     return jobInfo;
   }
 

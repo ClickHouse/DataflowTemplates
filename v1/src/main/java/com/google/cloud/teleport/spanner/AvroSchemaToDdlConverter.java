@@ -21,9 +21,12 @@ import static com.google.cloud.teleport.spanner.AvroUtil.HIDDEN;
 import static com.google.cloud.teleport.spanner.AvroUtil.IDENTITY_COLUMN;
 import static com.google.cloud.teleport.spanner.AvroUtil.INPUT;
 import static com.google.cloud.teleport.spanner.AvroUtil.NOT_NULL;
+import static com.google.cloud.teleport.spanner.AvroUtil.ON_UPDATE_EXPRESSION;
 import static com.google.cloud.teleport.spanner.AvroUtil.OUTPUT;
 import static com.google.cloud.teleport.spanner.AvroUtil.SPANNER_CHANGE_STREAM_FOR_CLAUSE;
 import static com.google.cloud.teleport.spanner.AvroUtil.SPANNER_CHECK_CONSTRAINT;
+import static com.google.cloud.teleport.spanner.AvroUtil.SPANNER_DYNAMIC_LABEL;
+import static com.google.cloud.teleport.spanner.AvroUtil.SPANNER_DYNAMIC_PROPERTIES;
 import static com.google.cloud.teleport.spanner.AvroUtil.SPANNER_EDGE_TABLE;
 import static com.google.cloud.teleport.spanner.AvroUtil.SPANNER_ENTITY;
 import static com.google.cloud.teleport.spanner.AvroUtil.SPANNER_ENTITY_MODEL;
@@ -259,6 +262,23 @@ public class AvroSchemaToDdlConverter {
       }
       nodeTableBuilder.labelToPropertyDefinitions(labelsBuilder.build());
 
+      // Deserialize dynamicLabelExpression
+      String dynamicLabelColumn =
+          schema.getProp(SPANNER_NODE_TABLE + "_" + nodeTableCount + "_" + SPANNER_DYNAMIC_LABEL);
+      if (dynamicLabelColumn != null) {
+        nodeTableBuilder.dynamicLabelExpression(
+            new PropertyGraph.GraphDynamicLabelExpression(dynamicLabelColumn));
+      }
+
+      // Deserialize dynamicPropertiesExpression
+      String dynamicPropertiesColumn =
+          schema.getProp(
+              SPANNER_NODE_TABLE + "_" + nodeTableCount + "_" + SPANNER_DYNAMIC_PROPERTIES);
+      if (dynamicPropertiesColumn != null) {
+        nodeTableBuilder.dynamicPropertiesExpression(
+            new PropertyGraph.GraphDynamicPropertiesExpression(dynamicPropertiesColumn));
+      }
+
       propertyGraphBuilder.addNodeTable(nodeTableBuilder.autoBuild());
       nodeTableCount++;
     }
@@ -370,6 +390,23 @@ public class AvroSchemaToDdlConverter {
               targetNodeTableName,
               ImmutableList.copyOf(targetNodeKeyColumns),
               ImmutableList.copyOf(targetEdgeKeyColumns)));
+
+      // Deserialize dynamicLabelExpression
+      String dynamicLabelColumn =
+          schema.getProp(SPANNER_EDGE_TABLE + "_" + edgeTableCount + "_" + SPANNER_DYNAMIC_LABEL);
+      if (dynamicLabelColumn != null) {
+        edgeTableBuilder.dynamicLabelExpression(
+            new PropertyGraph.GraphDynamicLabelExpression(dynamicLabelColumn));
+      }
+
+      // Deserialize dynamicPropertiesExpression
+      String dynamicPropertiesColumn =
+          schema.getProp(
+              SPANNER_EDGE_TABLE + "_" + edgeTableCount + "_" + SPANNER_DYNAMIC_PROPERTIES);
+      if (dynamicPropertiesColumn != null) {
+        edgeTableBuilder.dynamicPropertiesExpression(
+            new PropertyGraph.GraphDynamicPropertiesExpression(dynamicPropertiesColumn));
+      }
 
       propertyGraphBuilder.addEdgeTable(edgeTableBuilder.autoBuild());
       edgeTableCount++;
@@ -596,6 +633,9 @@ public class AvroSchemaToDdlConverter {
           if (nullable) {
             avroType = unpacked;
           }
+        } else {
+          String notNull = f.getProp(NOT_NULL);
+          nullable = notNull != null && !Boolean.parseBoolean(notNull);
         }
         if (Strings.isNullOrEmpty(sqlType)) {
           Type spannerType = inferType(avroType, true);
@@ -603,6 +643,8 @@ public class AvroSchemaToDdlConverter {
         }
         String defaultExpression = f.getProp(DEFAULT_EXPRESSION);
         column.parseType(sqlType).notNull(!nullable).defaultExpression(defaultExpression);
+        String onUpdateExpression = f.getProp(ON_UPDATE_EXPRESSION);
+        column.parseType(sqlType).notNull(!nullable).onUpdateExpression(onUpdateExpression);
       }
       String hidden = f.getProp(HIDDEN);
       if (Boolean.parseBoolean(hidden)) {

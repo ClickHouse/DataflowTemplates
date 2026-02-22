@@ -463,6 +463,36 @@ public class DataStreamToSpannerDDLIT extends DataStreamToSpannerITBase {
     assertThatResult(result).meetsConditions();
   }
 
+  @Test
+  public void migrationTestWithIdentityColumns() {
+    // Construct a ChainedConditionCheck with 2 stages.
+    // 1. Send initial wave of events
+    // 2. Wait on Spanner to have events
+    ChainedConditionCheck conditionCheck =
+        ChainedConditionCheck.builder(
+                List.of(
+                    uploadDataStreamFile(
+                        jobInfo,
+                        TABLE6,
+                        "identity.avro",
+                        "DataStreamToSpannerDDLIT/Books.avro",
+                        gcsResourceManager),
+                    SpannerRowsCheck.builder(spannerResourceManager, TABLE6)
+                        .setMinRows(3)
+                        .setMaxRows(3)
+                        .build()))
+            .build();
+
+    // Wait for conditions
+    PipelineOperator.Result result =
+        pipelineOperator()
+            .waitForCondition(createConfig(jobInfo, Duration.ofMinutes(8)), conditionCheck);
+
+    // Assert Conditions
+    assertThatResult(result).meetsConditions();
+    assertBooksBackfillContents();
+  }
+
   private void assertAllDatatypeColumnsTableBackfillContents() {
     List<Map<String, Object>> events = new ArrayList<>();
 
@@ -630,7 +660,7 @@ public class DataStreamToSpannerDDLIT extends DataStreamToSpannerITBase {
     row.put("bool_column", false);
     row.put("binary_column", "YmluYXJ5X2RhdGFfMQAAAAAAAAA=");
     row.put("varbinary_column", "dmFyYmluYXJ5X2RhdGFfMQ==");
-    row.put("bit_column", "AQI=");
+    row.put("bit_column", "Zg==");
     events.add(row);
 
     row = new HashMap<>();
@@ -661,7 +691,7 @@ public class DataStreamToSpannerDDLIT extends DataStreamToSpannerITBase {
     row.put("bool_column", true);
     row.put("binary_column", "YmluYXJ5X2RhdGFfMgAAAAAAAAA=");
     row.put("varbinary_column", "dmFyYmluYXJ5X2RhdGFfMg==");
-    row.put("bit_column", "JQ==");
+    row.put("bit_column", "GQ==");
     events.add(row);
 
     SpannerAsserts.assertThatStructs(
@@ -696,7 +726,7 @@ public class DataStreamToSpannerDDLIT extends DataStreamToSpannerITBase {
     row.put("enum_column", "1");
     row.put("bool_column", true);
     row.put("binary_column", "AQIDBAUGBwgJCgsMDQ4PEBESExQ=");
-    row.put("bit_column", "Ew==");
+    row.put("bit_column", "DQ==");
     events.add(row);
 
     row = new HashMap<>();
@@ -717,7 +747,7 @@ public class DataStreamToSpannerDDLIT extends DataStreamToSpannerITBase {
     row.put("enum_column", "1");
     row.put("bool_column", true);
     row.put("binary_column", "AQIDBAUGBwgJCgsMDQ4PEBESExQ=");
-    row.put("bit_column", "Ew==");
+    row.put("bit_column", "DQ==");
     events.add(row);
 
     row = new HashMap<>();
@@ -738,7 +768,7 @@ public class DataStreamToSpannerDDLIT extends DataStreamToSpannerITBase {
     row.put("enum_column", "1");
     row.put("bool_column", true);
     row.put("binary_column", "AQIDBAUGBwgJCgsMDQ4PEBESExQ=");
-    row.put("bit_column", "Ew==");
+    row.put("bit_column", "DQ==");
     events.add(row);
 
     SpannerAsserts.assertThatStructs(
@@ -767,7 +797,7 @@ public class DataStreamToSpannerDDLIT extends DataStreamToSpannerITBase {
     row.put("enum_column", "3");
     row.put("bool_column", true);
     row.put("binary_column", "EjRWeJCrze8SNFZ4kKvN7xI0Vng=");
-    row.put("bit_column", "ASc=");
+    row.put("bit_column", "fw==");
     events.add(row);
 
     row = new HashMap<>();
@@ -828,7 +858,7 @@ public class DataStreamToSpannerDDLIT extends DataStreamToSpannerITBase {
     row.put("bool_column", false);
     row.put("binary_column", "YmluYXJ5X2RhdGFfMQAAAAAAAAA=");
     row.put("varbinary_column", "dmFyYmluYXJ5X2RhdGFfMQ==");
-    row.put("bit_column", "AQI=");
+    row.put("bit_column", "Zg==");
     events.add(row);
 
     SpannerAsserts.assertThatStructs(
@@ -853,7 +883,7 @@ public class DataStreamToSpannerDDLIT extends DataStreamToSpannerITBase {
     row.put("bool_column", false);
     row.put("binary_column", "YmluYXJ5X2RhdGFfMQAAAAAAAAA=");
     row.put("varbinary_column", "dmFyYmluYXJ5X2RhdGFfMQ==");
-    row.put("bit_column", "AQI=");
+    row.put("bit_column", "Zg==");
     events.add(row);
 
     row = new HashMap<>();
@@ -864,7 +894,7 @@ public class DataStreamToSpannerDDLIT extends DataStreamToSpannerITBase {
     row.put("bool_column", true);
     row.put("binary_column", "YmluYXJ5X2RhdGFfMgAAAAAAAAA=");
     row.put("varbinary_column", "dmFyYmluYXJ5X2RhdGFfMg==");
-    row.put("bit_column", "JQ==");
+    row.put("bit_column", "GQ==");
     events.add(row);
 
     SpannerAsserts.assertThatStructs(
@@ -886,13 +916,13 @@ public class DataStreamToSpannerDDLIT extends DataStreamToSpannerITBase {
     row.put("bool_column", true);
     row.put("binary_column", "YmluYXJ5X2RhdGFfMgAAAAAAAAA=");
     row.put("varbinary_column", "dmFyYmluYXJ5X2RhdGFfMg==");
-    row.put("bit_column", "JQ==");
+    row.put("bit_column", "GQ==");
     events.add(row);
 
     SpannerAsserts.assertThatStructs(
             spannerResourceManager.runQuery(
                 "select varchar_column, float_column, decimal_column, char_column, bool_column"
-                    + ", binary_column, varbinary_column, bit_column, from DatatypeColumnsWithSizes"))
+                    + ", binary_column, varbinary_column, bit_column, from DatatypeColumnsReducedSizes"))
         .hasRecordsUnorderedCaseInsensitiveColumns(events);
   }
 
@@ -949,6 +979,28 @@ public class DataStreamToSpannerDDLIT extends DataStreamToSpannerITBase {
 
     SpannerAsserts.assertThatStructs(
             spannerResourceManager.runQuery("select id, name from Authors"))
+        .hasRecordsUnorderedCaseInsensitiveColumns(events);
+  }
+
+  private void assertBooksBackfillContents() {
+    List<Map<String, Object>> events = new ArrayList<>();
+
+    Map<String, Object> row = new HashMap<>();
+    row.put("id", 1);
+    row.put("title", "The Lord of the Rings");
+    events.add(row);
+
+    row = new HashMap<>();
+    row.put("id", 2);
+    row.put("title", "Pride and Prejudice");
+    events.add(row);
+
+    row = new HashMap<>();
+    row.put("id", 3);
+    row.put("title", "The Hitchhiker's Guide to the Galaxy");
+    events.add(row);
+
+    SpannerAsserts.assertThatStructs(spannerResourceManager.runQuery("select id, title from Books"))
         .hasRecordsUnorderedCaseInsensitiveColumns(events);
   }
 }

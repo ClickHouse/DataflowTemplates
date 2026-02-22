@@ -51,6 +51,7 @@ import org.apache.beam.it.jdbc.JDBCResourceManager;
 import org.apache.beam.it.jdbc.MySQLResourceManager;
 import org.junit.AfterClass;
 import org.junit.Before;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.runner.RunWith;
@@ -62,6 +63,7 @@ import org.slf4j.LoggerFactory;
 @Category({TemplateIntegrationTest.class, SkipDirectRunnerTest.class})
 @TemplateIntegrationTest(GCSToSourceDb.class)
 @RunWith(JUnit4.class)
+@Ignore("The template is being deprecated.")
 public class GCSToSourceDbInterleaveMultiShardIT extends TemplateTestBase {
 
   private static final Logger LOG =
@@ -417,7 +419,7 @@ public class GCSToSourceDbInterleaveMultiShardIT extends TemplateTestBase {
     LaunchConfig.Builder options = LaunchConfig.builder(jobName, specPath);
     options.setParameters(params);
     // Run
-    writerJobInfo = launchTemplate(options, false);
+    writerJobInfo = launchTemplate(options);
   }
 
   private void launchReaderDataflowJob() throws IOException {

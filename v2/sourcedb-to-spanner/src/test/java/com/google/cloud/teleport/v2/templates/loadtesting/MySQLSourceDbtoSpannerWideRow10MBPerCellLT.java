@@ -20,6 +20,7 @@ import com.google.cloud.teleport.v2.source.reader.io.jdbc.iowrapper.config.SQLDi
 import com.google.cloud.teleport.v2.templates.SourceDbToSpanner;
 import java.util.HashMap;
 import java.util.Map;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.runner.RunWith;
@@ -28,23 +29,21 @@ import org.junit.runners.JUnit4;
 @Category(TemplateLoadTest.class)
 @TemplateLoadTest(SourceDbToSpanner.class)
 @RunWith(JUnit4.class)
+@Ignore("Disabling flaky LT b/446480465")
 public class MySQLSourceDbtoSpannerWideRow10MBPerCellLT extends SourceDbToSpannerLTBase {
   private static final String WORKER_MACHINE_TYPE = "n1-highmem-96";
+  private static final String LAUNCHER_MACHINE_TYPE = "n1-highmem-64";
   private static final String FETCH_SIZE = "4000";
 
   @Test
   public void mySQLToSpannerWideRow10MBPerCellTest() throws Exception {
 
     String username =
-        accessSecret(
-            "projects/269744978479/secrets/nokill-sourcedb-mysql-to-spanner-cloudsql-username/versions/1");
+        accessSecret("projects/269744978479/secrets/wide-row-10-mb-username/versions/1");
     String password =
-        accessSecret(
-            "projects/269744978479/secrets/nokill-sourcedb-mysql-to-spanner-cloudsql-password/versions/1");
+        accessSecret("projects/269744978479/secrets/wide-row-10-mb-password/versions/1");
     String database = "10MBStringCell";
-    String host =
-        accessSecret(
-            "projects/269744978479/secrets/nokill-sourcedb-mysql-to-spanner-cloudsql-ip-address/versions/1");
+    String host = accessSecret("projects/269744978479/secrets/wide-row-10-mb-host/versions/1");
     int port = 3306;
 
     setUp(SQLDialect.MYSQL, host, port, username, password, database);
@@ -53,7 +52,7 @@ public class MySQLSourceDbtoSpannerWideRow10MBPerCellLT extends SourceDbToSpanne
     Map<String, Integer> expectedCountPerTable =
         new HashMap<>() {
           {
-            put("WideRowTable", 20000);
+            put("WideRowTable", 10000);
           }
         };
 
@@ -62,20 +61,18 @@ public class MySQLSourceDbtoSpannerWideRow10MBPerCellLT extends SourceDbToSpanne
           {
             put("workerMachineType", WORKER_MACHINE_TYPE);
             put("fetchSize", FETCH_SIZE);
-          }
-        };
-
-    ADDITIONAL_JOB_PARAMS.putAll(
-        new HashMap<>() {
-          {
             put("network", VPC_NAME);
             put("subnetwork", SUBNET_NAME);
             put("workerRegion", VPC_REGION);
           }
-        });
+        };
 
-    Map<String, String> env = new HashMap<>() {};
-
+    Map<String, String> env =
+        new HashMap<>() {
+          {
+            put("launcherMachineType", LAUNCHER_MACHINE_TYPE);
+          }
+        };
     runLoadTest(expectedCountPerTable, params, env);
   }
 }

@@ -23,9 +23,12 @@ import static com.google.cloud.teleport.spanner.AvroUtil.HIDDEN;
 import static com.google.cloud.teleport.spanner.AvroUtil.IDENTITY_COLUMN;
 import static com.google.cloud.teleport.spanner.AvroUtil.INPUT;
 import static com.google.cloud.teleport.spanner.AvroUtil.NOT_NULL;
+import static com.google.cloud.teleport.spanner.AvroUtil.ON_UPDATE_EXPRESSION;
 import static com.google.cloud.teleport.spanner.AvroUtil.OUTPUT;
 import static com.google.cloud.teleport.spanner.AvroUtil.SPANNER_CHANGE_STREAM_FOR_CLAUSE;
 import static com.google.cloud.teleport.spanner.AvroUtil.SPANNER_CHECK_CONSTRAINT;
+import static com.google.cloud.teleport.spanner.AvroUtil.SPANNER_DYNAMIC_LABEL;
+import static com.google.cloud.teleport.spanner.AvroUtil.SPANNER_DYNAMIC_PROPERTIES;
 import static com.google.cloud.teleport.spanner.AvroUtil.SPANNER_EDGE_TABLE;
 import static com.google.cloud.teleport.spanner.AvroUtil.SPANNER_ENTITY;
 import static com.google.cloud.teleport.spanner.AvroUtil.SPANNER_ENTITY_MODEL;
@@ -230,6 +233,9 @@ public class DdlToAvroSchemaConverter {
             }
           } else if (cm.defaultExpression() != null) {
             fieldBuilder.prop(DEFAULT_EXPRESSION, cm.defaultExpression());
+            if (cm.onUpdateExpression() != null) {
+              fieldBuilder.prop(ON_UPDATE_EXPRESSION, cm.onUpdateExpression());
+            }
           }
           Schema avroType = avroType(cm.type(), table.name() + "_" + columnOrdinal++);
           if (!cm.notNull()) {
@@ -301,6 +307,20 @@ public class DdlToAvroSchemaConverter {
       schemas.add(schema);
     }
 
+    for (View view : ddl.views()) {
+      LOG.info("DdlToAvo view {}", view.name());
+      SchemaBuilder.RecordBuilder<Schema> recordBuilder =
+          SchemaBuilder.record(generateAvroSchemaName(view.name())).namespace(this.namespace);
+      recordBuilder.prop(SPANNER_NAME, view.name());
+      recordBuilder.prop(GOOGLE_FORMAT_VERSION, version);
+      recordBuilder.prop(GOOGLE_STORAGE, "CloudSpanner");
+      recordBuilder.prop(SPANNER_VIEW_QUERY, view.query());
+      if (view.security() != null) {
+        recordBuilder.prop(SPANNER_VIEW_SECURITY, view.security().toString());
+      }
+      schemas.add(recordBuilder.fields().endRecord());
+    }
+
     for (PropertyGraph propertyGraph : ddl.propertyGraphs()) {
       LOG.info("DdlToAvro PropertyGraph {}", propertyGraph.name());
       SchemaBuilder.RecordBuilder<Schema> recordBuilder =
@@ -330,20 +350,6 @@ public class DdlToAvroSchemaConverter {
 
       Schema schema = recordBuilder.fields().endRecord();
       schemas.add(schema);
-    }
-
-    for (View view : ddl.views()) {
-      LOG.info("DdlToAvo view {}", view.name());
-      SchemaBuilder.RecordBuilder<Schema> recordBuilder =
-          SchemaBuilder.record(generateAvroSchemaName(view.name())).namespace(this.namespace);
-      recordBuilder.prop(SPANNER_NAME, view.name());
-      recordBuilder.prop(GOOGLE_FORMAT_VERSION, version);
-      recordBuilder.prop(GOOGLE_STORAGE, "CloudSpanner");
-      recordBuilder.prop(SPANNER_VIEW_QUERY, view.query());
-      if (view.security() != null) {
-        recordBuilder.prop(SPANNER_VIEW_SECURITY, view.security().toString());
-      }
-      schemas.add(recordBuilder.fields().endRecord());
     }
 
     for (ChangeStream changeStream : ddl.changeStreams()) {
@@ -470,6 +476,16 @@ public class DdlToAvroSchemaConverter {
             prefix + "_" + i + "_LABEL_" + j + "_PROPERTY_" + k + "_VALUE",
             propertyDef.valueExpressionString);
       }
+    }
+    if (elementTable.dynamicLabelExpression() != null) {
+      recordBuilder.prop(
+          prefix + "_" + i + "_" + SPANNER_DYNAMIC_LABEL,
+          elementTable.dynamicLabelExpression().dynamicLabelExpression);
+    }
+    if (elementTable.dynamicPropertiesExpression() != null) {
+      recordBuilder.prop(
+          prefix + "_" + i + "_" + SPANNER_DYNAMIC_PROPERTIES,
+          elementTable.dynamicPropertiesExpression().dynamicPropertiesExpression);
     }
   }
 
